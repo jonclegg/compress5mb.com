@@ -51,12 +51,15 @@ functions:
       - httpApi:
           method: POST
           path: /api/multipart/complete
+      - httpApi:
+          method: GET
+          path: /api/status
 
   converter:
     handler: converter.handle
-    memorySize: 2048
-    timeout: 600
-    ephemeralStorageSize: 2048  # 2GB ephemeral storage for large file processing
+    memorySize: 10240  # 10GB RAM (max)
+    timeout: 900       # 15 minutes (max)
+    ephemeralStorageSize: 10240  # 10GB ephemeral storage (max)
     layers:
       - { Ref: FfmpegLambdaLayer }
     events:

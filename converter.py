@@ -131,6 +131,10 @@ def _convert_video(src: str, dst: str):
 def handle(event, context):
 	logger.info(f"Converter invoked with event: {json.dumps(event)}")
 	
+	# Log available disk space
+	total, used, free = shutil.disk_usage("/tmp")
+	logger.info(f"Ephemeral storage: {free // (1024*1024)} MB free, {total // (1024*1024)} MB total")
+	
 	# S3 put event
 	records = event.get("Records") or []
 	if not records:

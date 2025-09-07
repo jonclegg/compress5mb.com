@@ -44,6 +44,7 @@ INDEX_HTML = """
       <progress id="progress" max="100" value="0"></progress>
     </div>
     <pre id="result" class="mono"></pre>
+    <div id="download" style="margin-top: 1rem;"></div>
   </div>
 
 <script>
@@ -85,6 +86,13 @@ async function completeMultipart(key, uploadId, parts) {
     body: JSON.stringify({ key, uploadId, parts })
   });
   if (!res.ok) throw new Error('Failed to complete multipart upload');
+  return res.json();
+}
+
+async function checkStatus(key) {
+  const params = new URLSearchParams({ key });
+  const res = await fetch(`/api/status?${params.toString()}`, { method: 'GET' });
+  if (!res.ok) throw new Error('Failed to check status');
   return res.json();
 }
 
@@ -134,6 +142,25 @@ async function uploadFile() {
   setStatus('Upload completed', 'success');
   byId('result').textContent = JSON.stringify(complete, null, 2);
   byId('upload').disabled = false;
+
+  // Poll for processed output
+  const pollStart = Date.now();
+  const maxMs = 15 * 60 * 1000; // 15 minutes
+  const intervalMs = 3000;
+  setStatus('Processing... waiting for output');
+  const download = byId('download');
+  download.textContent = '';
+  while (Date.now() - pollStart < maxMs) {
+    const status = await checkStatus(key);
+    if (status.ready) {
+      setStatus('Processing complete!', 'success');
+      download.innerHTML = `<a href="${status.url}" download>Download processed file</a>`;
+      byId('result').textContent = JSON.stringify(status, null, 2);
+      return;
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  setStatus('Timed out waiting for processed output', 'error');
 }
 
 byId('upload').addEventListener('click', () => {
@@ -241,6 +268,45 @@ def _handle_complete(event):
 
 ###############################################################################
 
+def _handle_status(event):
+	params = event.get("queryStringParameters") or {}
+	key = params.get("key")
+	if not key:
+		return _response(400, {"error": "key is required"})
+
+	# map uploads/<uuid>-<name.ext> -> processed/<name>.(mp4|jpg)
+	base, _sep, filename = key.rpartition("/")
+	name_no_ext = filename.rsplit(".", 1)[0]
+
+	# Try both video and image outputs
+	possible = [
+		f"processed/{name_no_ext}.mp4",
+		f"processed/{name_no_ext}.jpg",
+	]
+
+	for out_key in possible:
+		try:
+			head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)
+			url = s3.generate_presigned_url(
+				ClientMethod="get_object",
+				Params={"Bucket": BUCKET_NAME, "Key": out_key},
+				ExpiresIn=3600,
+			)
+			return _response(200, {
+				"ready": True,
+				"outputKey": out_key,
+				"contentType": head.get("ContentType"),
+				"size": int(head.get("ContentLength") or 0),
+				"url": url,
+			})
+		except Exception:
+			# not found, continue checking next possible key
+			continue
+
+	return _response(200, {"ready": False})
+
+###############################################################################
+
 def handle(event, context):
 	method, path = _get_method_path(event)
 	if method == "GET" and path == "/":
@@ -251,4 +317,6 @@ def handle(event, context):
 		return _handle_part_url(event)
 	if method == "POST" and path == "/api/multipart/complete":
 		return _handle_complete(event)
+	if method == "GET" and path == "/api/status":
+		return _handle_status(event)
 	return _response(404, {"error": "Not Found"})
