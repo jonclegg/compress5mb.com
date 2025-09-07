@@ -1,0 +1,95 @@
+service: fivemb-website
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  architecture: x86_64
+  region: us-east-1
+  stage: dev
+  environment:
+    BUCKET_NAME: ${self:service}-${sls:stage}-uploads
+  httpApi:
+    cors:
+      allowedOrigins:
+        - '*'
+      allowedHeaders:
+        - '*'
+      allowedMethods:
+        - GET
+        - POST
+        - OPTIONS
+      allowCredentials: false
+      maxAge: 86400
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - s3:CreateMultipartUpload
+        - s3:UploadPart
+        - s3:AbortMultipartUpload
+        - s3:CompleteMultipartUpload
+        - s3:PutObject
+        - s3:GetObject
+      Resource:
+        - arn:aws:s3:::${self:provider.environment.BUCKET_NAME}/*
+
+functions:
+  app:
+    handler: handler.handle
+    memorySize: 512
+    timeout: 30
+    events:
+      - httpApi:
+          method: GET
+          path: /
+      - httpApi:
+          method: POST
+          path: /api/multipart/initiate
+      - httpApi:
+          method: GET
+          path: /api/multipart/url
+      - httpApi:
+          method: POST
+          path: /api/multipart/complete
+
+  converter:
+    handler: converter.handle
+    memorySize: 2048
+    timeout: 600
+    ephemeralStorageSize: 2048  # 2GB ephemeral storage for large file processing
+    layers:
+      - { Ref: FfmpegLambdaLayer }
+    events:
+      - s3:
+          bucket: ${self:provider.environment.BUCKET_NAME}
+          event: s3:ObjectCreated:Put
+          existing: true
+          rules:
+            - prefix: uploads/
+      - s3:
+          bucket: ${self:provider.environment.BUCKET_NAME}
+          event: s3:ObjectCreated:CompleteMultipartUpload
+          existing: true
+          rules:
+            - prefix: uploads/
+
+layers:
+  ffmpeg:
+    path: layer
+    name: ${self:service}-${sls:stage}-ffmpeg
+    compatibleRuntimes:
+      - python3.11
+    description: ffmpeg and ffprobe static binaries for media conversion
+    package:
+      patterns:
+        - '**/*'
+
+resources:
+  Resources:
+    # Bucket is expected to already exist; skipping creation to avoid conflicts
+
+package:
+  patterns:
+    - '!**/*'
+    - handler.py
+    - converter.py
