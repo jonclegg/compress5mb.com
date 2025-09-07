@@ -151,7 +151,7 @@ INDEX_HTML = """
       transition: width 150ms ease;
       background-size: 200% 100%;
     }
-    .progress-fill.animated { animation: progressStripes 1.2s linear infinite; }
+    .progress-fill.animated { animation: progressStripes 3s linear infinite; }
     @keyframes progressStripes { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .status-line { margin-top: 8px; display: flex; justify-content: space-between; color: var(--muted); font-size: 14px; }
 
@@ -205,6 +205,7 @@ INDEX_HTML = """
         <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
         <div class="status-line">
           <span id="status" class="muted">Waiting</span>
+          <span id="timeRemaining" class="muted hidden"></span>
           <span id="percent" class="muted">0%</span>
         </div>
       </div>
@@ -239,11 +240,82 @@ function setProgress(percent) {
   byId('percent').textContent = pct + '%';
 }
 
+function setTimeRemaining(seconds) {
+  const timeEl = byId('timeRemaining');
+  if (seconds > 0) {
+    timeEl.textContent = formatTime(seconds) + ' remaining';
+    timeEl.classList.remove('hidden');
+  } else {
+    timeEl.classList.add('hidden');
+  }
+}
+
 function formatBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB'];
   const i = bytes > 0 ? Math.floor(Math.log(bytes) / Math.log(1024)) : 0;
   const val = bytes / Math.pow(1024, i);
   return (i === 0 ? bytes : val.toFixed(1)) + ' ' + units[i];
+}
+
+function formatTime(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return `${mins}m ${secs}s`;
+}
+
+// Timed progress for processing stage (no animation stripes)
+let processingProgressInterval = null;
+
+function startProcessingProgress(seconds) {
+  const totalMs = Math.max(1000, Math.round(seconds * 1000));
+  const start = Date.now();
+  setProgress(0);
+  if (processingProgressInterval) clearInterval(processingProgressInterval);
+  processingProgressInterval = setInterval(() => {
+    const elapsed = Date.now() - start;
+    const pct = Math.min(100, Math.round((elapsed / totalMs) * 100));
+    setProgress(pct);
+    if (pct >= 100) {
+      clearInterval(processingProgressInterval);
+      processingProgressInterval = null;
+    }
+  }, 100);
+}
+
+function stopProcessingProgress() {
+  if (processingProgressInterval) {
+    clearInterval(processingProgressInterval);
+    processingProgressInterval = null;
+  }
+}
+
+function estimateProcessingTime(file) {
+  if (file.size <= TARGET_BYTES) {
+    return 0; // No processing needed
+  }
+  
+  const fileSizeMB = file.size / (1024 * 1024);
+  const isVideo = file.type.startsWith('video/');
+  const isImage = file.type.startsWith('image/');
+  
+  let processingMs = 0;
+  
+  if (isVideo) {
+    // Videos: consistent ~2.8 seconds regardless of size
+    processingMs = 2800;
+  } else if (isImage) {
+    // Images: 200ms base + 2ms per MB (refined from analysis)
+    processingMs = 200 + (fileSizeMB * 2);
+  } else {
+    // Unknown type, assume video (conservative estimate)
+    processingMs = 2800;
+  }
+  
+  // Add status polling overhead (~3.5 seconds)
+  const totalMs = processingMs + 3500;
+  
+  return Math.round(totalMs / 1000); // Return seconds
 }
 
 async function initiateMultipart(filename, contentType) {
@@ -285,7 +357,14 @@ function getNumParts(size, chunkSize) { return Math.ceil(size / chunkSize); }
 function setSelectedFile(file) {
   if (!file) return;
   window.__selectedFile = file;
-  byId('filename').textContent = file.name + ' · ' + formatBytes(file.size);
+  
+  let filenameText = file.name + ' · ' + formatBytes(file.size);
+  
+  if (file.size <= TARGET_BYTES) {
+    filenameText += ' · no processing needed';
+  }
+  
+  byId('filename').textContent = filenameText;
   byId('convert').disabled = false;
   
   // Reset UI state when new file is selected
@@ -314,7 +393,6 @@ async function uploadAndProcess() {
 
   byId('convert').disabled = true;
   byId('progressWrap').classList.remove('hidden');
-  byId('progressFill').classList.add('animated');
   setStatus('Starting upload...', 'muted');
   setProgress(0);
 
@@ -346,17 +424,25 @@ async function uploadAndProcess() {
   const pollStart = Date.now();
   const maxMs = 15 * 60 * 1000;
   const intervalMs = 3000;
+  
+  // Start time-based progress for processing
+  const processingEstimate = estimateProcessingTime(file);
+  startProcessingProgress(processingEstimate);
+  
   while (Date.now() - pollStart < maxMs) {
     const status = await checkStatus(key);
     if (status.failed) {
+      stopProcessingProgress();
       byId('progressFill').classList.remove('animated');
       setStatus(status.error || 'Conversion failed', 'error');
       byId('convert').disabled = false;
       return;
     }
     if (status.ready) {
+      stopProcessingProgress();
       setStatus('Done', 'success');
       byId('progressFill').classList.remove('animated');
+      setProgress(100);
       byId('downloadLink').href = status.url;
       const sizeText = status.size ? ' · ' + formatBytes(status.size) : '';
       byId('readyText').textContent = 'Your file is ready' + sizeText + '.';
@@ -368,6 +454,7 @@ async function uploadAndProcess() {
     }
     await new Promise(r => setTimeout(r, intervalMs));
   }
+  stopProcessingProgress();
   setStatus('Timed out waiting for output', 'error');
 }
 
@@ -461,7 +548,7 @@ def _handle_initiate(event):
 	content_type = data.get("contentType", "application/octet-stream")
 	if not filename:
 		return _response(400, {"error": "filename is required"})
-	key = f"uploads/{uuid.uuid4()}-{filename}"
+	key = f"uploads/{uuid.uuid4()}"
 	create = s3.create_multipart_upload(Bucket=BUCKET_NAME, Key=key, ContentType=content_type)
 	upload_id = create["UploadId"]
 	return _response(200, {"uploadId": upload_id, "key": key})
@@ -529,6 +616,16 @@ def _handle_status(event):
 			return _response(200, {"ready": False, "state": "processing"})
 		if state == "completed":
 			out_key = status_payload.get("output")
+			url_cached = status_payload.get("url")
+			if out_key and url_cached:
+				# Fast path: use URL and size/type if present
+				return _response(200, {
+					"ready": True,
+					"outputKey": out_key,
+					"url": url_cached,
+					"size": status_payload.get("outputSize"),
+					"contentType": status_payload.get("outputType"),
+				})
 			if out_key:
 				try:
 					head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)

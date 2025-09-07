@@ -5,6 +5,8 @@ import subprocess
 import logging
 import shutil
 from decimal import Decimal
+import uuid
+import imghdr
 
 import boto3
 
@@ -166,18 +168,24 @@ def handle(event, context):
 		return _response(200, {"skipped": True, "reason": "bucket mismatch"})
 
 	try:
-		head = _head_object(key)
-		content_type = head.get("ContentType") or "application/octet-stream"
-		size = int(head.get("ContentLength") or 0)
-		logger.info(f"Object metadata: content_type={content_type}, size={size} bytes")
+		# Use event size (avoids HeadObject which may be forbidden by bucket policy)
+		obj_info = rec.get("s3", {}).get("object", {})
+		size = int(obj_info.get("size") or 0)
+		logger.info(f"Object size from event: {size} bytes")
 
 		# Mark processing started
 		_write_status(key, "processing", {"message": "conversion started"})
 
 		# Skip if already small enough
-		if size <= TARGET_BYTES:
+		if size and size <= TARGET_BYTES:
 			logger.info(f"Skipping conversion: file size {size} <= {TARGET_BYTES} bytes")
-			_write_status(key, "completed", {"output": key, "outputSize": size, "outputType": content_type, "note": "original already <= 5MB"})
+			# Provide presigned URL so status polling doesn't need HeadObject
+			url = s3.generate_presigned_url(
+				ClientMethod="get_object",
+				Params={"Bucket": BUCKET_NAME, "Key": key},
+				ExpiresIn=3600,
+			)
+			_write_status(key, "completed", {"output": key, "outputSize": size, "url": url, "note": "original already <= 5MB"})
 			return _response(200, {"skipped": True, "reason": "already <= 5MB"})
 
 		# Download
@@ -186,47 +194,50 @@ def handle(event, context):
 		logger.info(f"Downloaded to {src_path}")
 		
 		base, _sep, filename = key.rpartition("/")
-		name_no_ext = filename.rsplit(".", 1)[0]
-		logger.info(f"Processing file: {filename} -> {name_no_ext}")
+		logger.info(f"Processing file: {filename}")
 
-		# Output key under processed/
-		if _is_video(content_type):
-			out_key = f"processed/{name_no_ext}.mp4"
-			logger.info(f"Converting video to {out_key}")
-			with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-				dst_path = tmp.name
-			logger.info(f"Video conversion temp file: {dst_path}")
-			_convert_video(src_path, dst_path)
-			logger.info(f"Video conversion complete, uploading to {out_key}")
-			_upload_from_path(dst_path, out_key, content_type="video/mp4")
-			os.unlink(dst_path)
-		elif _is_image(content_type):
-			out_key = f"processed/{name_no_ext}.jpg"
+		# Decide media type from file contents (no reliance on key name or HeadObject)
+		media_is_image = imghdr.what(src_path) is not None
+		if media_is_image:
+			out_key = f"processed/{uuid.uuid4()}.jpg"
 			logger.info(f"Converting image to {out_key}")
 			with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
 				dst_path = tmp.name
 			logger.info(f"Image conversion temp file: {dst_path}")
 			_convert_image(src_path, dst_path)
+			output_size = os.path.getsize(dst_path)
 			logger.info(f"Image conversion complete, uploading to {out_key}")
 			_upload_from_path(dst_path, out_key, content_type="image/jpeg")
+			output_type = "image/jpeg"
 			os.unlink(dst_path)
 		else:
-			logger.warning(f"Unsupported content type: {content_type}")
-			_write_status(key, "failure", {"error": f"unsupported type {content_type}"})
-			return _response(200, {"skipped": True, "reason": f"unsupported type {content_type}"})
+			out_key = f"processed/{uuid.uuid4()}.mp4"
+			logger.info(f"Converting video to {out_key}")
+			with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+				dst_path = tmp.name
+			logger.info(f"Video conversion temp file: {dst_path}")
+			_convert_video(src_path, dst_path)
+			output_size = os.path.getsize(dst_path)
+			logger.info(f"Video conversion complete, uploading to {out_key}")
+			_upload_from_path(dst_path, out_key, content_type="video/mp4")
+			output_type = "video/mp4"
+			os.unlink(dst_path)
 
 		os.unlink(src_path)
 		logger.info(f"Cleaned up source temp file: {src_path}")
 
-		out_head = _head_object(out_key)
-		output_size = int(out_head.get("ContentLength") or 0)
-		output_type = out_head.get("ContentType")
-		
+		# Generate presigned URL for output to avoid HeadObject during status polling
+		url = s3.generate_presigned_url(
+			ClientMethod="get_object",
+			Params={"Bucket": BUCKET_NAME, "Key": out_key},
+			ExpiresIn=3600,
+		)
 		result = {
 			"source": key,
 			"output": out_key,
 			"outputSize": output_size,
 			"outputType": output_type,
+			"url": url,
 		}
 		logger.info(f"Conversion successful: {json.dumps(result)}")
 		_write_status(key, "completed", result)
