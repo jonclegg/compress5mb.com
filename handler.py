@@ -185,7 +185,7 @@ INDEX_HTML = """
 
   <main class="container">
     <section class="card">
-      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop a file or click to choose">
+      <label id="dropzone" for="file" class="dropzone" tabindex="0" role="button" aria-label="Drop a file or click to choose">
         <svg class="dz-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <path d="M12 16V4m0 0l-4 4m4-4l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="M20 16.5a3.5 3.5 0 01-3.5 3.5h-9A3.5 3.5 0 014 16.5 3.5 3.5 0 017.5 13h.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -193,8 +193,8 @@ INDEX_HTML = """
         <p class="dz-title">Drop a file here</p>
         <p class="dz-hint">or click to choose from your computer</p>
         <p class="accept">Images and videos supported</p>
-        <input id="file" type="file" accept="image/*,video/*" hidden />
-      </div>
+        <input id="file" type="file" accept="image/*,video/*" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;" />
+      </label>
 
       <div class="actions">
         <button id="convert" class="btn" disabled>Convert</button>
@@ -287,6 +287,13 @@ function setSelectedFile(file) {
   window.__selectedFile = file;
   byId('filename').textContent = file.name + ' · ' + formatBytes(file.size);
   byId('convert').disabled = false;
+  
+  // Reset UI state when new file is selected
+  byId('resultWrap').classList.add('hidden');
+  byId('progressWrap').classList.add('hidden');
+  byId('progressFill').classList.remove('animated');
+  setProgress(0);
+  setStatus('Waiting', 'muted');
 }
 
 async function uploadAndProcess() {
@@ -341,6 +348,12 @@ async function uploadAndProcess() {
   const intervalMs = 3000;
   while (Date.now() - pollStart < maxMs) {
     const status = await checkStatus(key);
+    if (status.failed) {
+      byId('progressFill').classList.remove('animated');
+      setStatus(status.error || 'Conversion failed', 'error');
+      byId('convert').disabled = false;
+      return;
+    }
     if (status.ready) {
       setStatus('Done', 'success');
       byId('progressFill').classList.remove('animated');
@@ -362,8 +375,6 @@ async function uploadAndProcess() {
 const dropzone = byId('dropzone');
 const fileInput = byId('file');
 
-dropzone.addEventListener('click', () => fileInput.click());
-dropzone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
 dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
 dropzone.addEventListener('drop', (e) => {
@@ -401,6 +412,21 @@ def _response(status_code, body, content_type="application/json"):
 		"Access-Control-Allow-Headers": "*",
 	}
 	return {"statusCode": status_code, "headers": headers, "body": body_str}
+
+###############################################################################
+
+def _status_key_for_upload(upload_key: str) -> str:
+	base, _sep, filename = upload_key.rpartition("/")
+	return f"status/{filename}.json"
+
+###############################################################################
+
+def _write_status(upload_key: str, state: str, extra: dict | None = None):
+	status_key = _status_key_for_upload(upload_key)
+	payload = {"state": state, "source": upload_key}
+	if extra:
+		payload.update(extra)
+	s3.put_object(Bucket=BUCKET_NAME, Key=status_key, Body=json.dumps(payload).encode("utf-8"), ContentType="application/json")
 
 ###############################################################################
 
@@ -479,6 +505,8 @@ def _handle_complete(event):
 		MultipartUpload={"Parts": parts_sorted},
 		UploadId=upload_id,
 	)
+	# Record processing state so the client can display progress while Lambda runs
+	_write_status(key, "processing", {"message": "awaiting conversion"})
 	return _response(200, result)
 
 ###############################################################################
@@ -489,7 +517,41 @@ def _handle_status(event):
 	if not key:
 		return _response(400, {"error": "key is required"})
 
-	# map uploads/<uuid>-<name.ext> -> processed/<name>.(mp4|jpg)
+	# First, check explicit status JSON if present
+	status_key = _status_key_for_upload(key)
+	try:
+		obj = s3.get_object(Bucket=BUCKET_NAME, Key=status_key)
+		status_payload = json.loads(obj["Body"].read())
+		state = status_payload.get("state")
+		if state == "failure":
+			return _response(200, {"ready": False, "failed": True, "error": status_payload.get("error")})
+		if state == "processing":
+			return _response(200, {"ready": False, "state": "processing"})
+		if state == "completed":
+			out_key = status_payload.get("output")
+			if out_key:
+				try:
+					head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)
+					url = s3.generate_presigned_url(
+						ClientMethod="get_object",
+						Params={"Bucket": BUCKET_NAME, "Key": out_key},
+						ExpiresIn=3600,
+					)
+					return _response(200, {
+						"ready": True,
+						"outputKey": out_key,
+						"contentType": head.get("ContentType"),
+						"size": int(head.get("ContentLength") or 0),
+						"url": url,
+					})
+				except Exception:
+					# If for some reason the output isn't there, fall through to legacy checks
+					pass
+	except Exception:
+		# No status file yet; fall through to legacy behavior
+		pass
+
+	# Legacy mapping: uploads/<uuid>-<name.ext> -> processed/<name>.(mp4|jpg)
 	base, _sep, filename = key.rpartition("/")
 	name_no_ext = filename.rsplit(".", 1)[0]
 

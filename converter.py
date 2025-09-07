@@ -23,6 +23,21 @@ def _response(status_code, body):
 
 ###############################################################################
 
+def _status_key_for_upload(upload_key: str) -> str:
+	base, _sep, filename = upload_key.rpartition("/")
+	return f"status/{filename}.json"
+
+###############################################################################
+
+def _write_status(upload_key: str, state: str, extra: dict | None = None):
+	status_key = _status_key_for_upload(upload_key)
+	payload = {"state": state, "source": upload_key}
+	if extra:
+		payload.update(extra)
+	s3.put_object(Bucket=BUCKET_NAME, Key=status_key, Body=json.dumps(payload).encode("utf-8"), ContentType="application/json")
+
+###############################################################################
+
 def _head_object(key: str):
 	return s3.head_object(Bucket=BUCKET_NAME, Key=key)
 
@@ -156,9 +171,13 @@ def handle(event, context):
 		size = int(head.get("ContentLength") or 0)
 		logger.info(f"Object metadata: content_type={content_type}, size={size} bytes")
 
+		# Mark processing started
+		_write_status(key, "processing", {"message": "conversion started"})
+
 		# Skip if already small enough
 		if size <= TARGET_BYTES:
 			logger.info(f"Skipping conversion: file size {size} <= {TARGET_BYTES} bytes")
+			_write_status(key, "completed", {"output": key, "outputSize": size, "outputType": content_type, "note": "original already <= 5MB"})
 			return _response(200, {"skipped": True, "reason": "already <= 5MB"})
 
 		# Download
@@ -193,6 +212,7 @@ def handle(event, context):
 			os.unlink(dst_path)
 		else:
 			logger.warning(f"Unsupported content type: {content_type}")
+			_write_status(key, "failure", {"error": f"unsupported type {content_type}"})
 			return _response(200, {"skipped": True, "reason": f"unsupported type {content_type}"})
 
 		os.unlink(src_path)
@@ -209,8 +229,13 @@ def handle(event, context):
 			"outputType": output_type,
 		}
 		logger.info(f"Conversion successful: {json.dumps(result)}")
+		_write_status(key, "completed", result)
 		return _response(200, result)
 		
 	except Exception as e:
 		logger.error(f"Error processing {key}: {str(e)}", exc_info=True)
+		try:
+			_write_status(key, "failure", {"error": str(e)})
+		except Exception:
+			pass
 		raise
