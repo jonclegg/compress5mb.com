@@ -114,7 +114,7 @@ INDEX_HTML = """
     .dz-hint { color: var(--muted); margin: 0; }
     .accept { font-size: 12px; color: var(--muted); margin-top: 12px; }
 
-    .actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+    .actions { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 18px; }
     .filename {
       color: var(--muted);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -127,18 +127,27 @@ INDEX_HTML = """
 
     .btn {
       appearance: none;
-      padding: 12px 16px;
-      border-radius: 12px;
+      padding: 20px 32px;
+      border-radius: 16px;
       border: 1px solid rgba(255,255,255,0.06);
       background: linear-gradient(180deg, var(--primary), var(--primary-2));
       color: #fff;
+      font-size: 18px;
       font-weight: 700;
       letter-spacing: 0.01em;
       cursor: pointer;
       transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
-      box-shadow: 0 8px 20px rgba(37,99,235,0.25);
+      box-shadow: 0 12px 28px rgba(37,99,235,0.25);
+      min-width: 200px;
     }
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      box-shadow: none;
+      background: #6b7280;
+      color: #d1d5db;
+      filter: grayscale(100%);
+    }
     .btn:not(:disabled):hover { filter: brightness(1.03); transform: translateY(-1px); }
     .btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); box-shadow: none; }
     .btn.secondary:hover { background: rgba(148,163,184,0.10); }
@@ -148,7 +157,7 @@ INDEX_HTML = """
     .progress-fill {
       height: 100%; width: 0%;
       background: linear-gradient(90deg, var(--accent), var(--primary));
-      transition: width 150ms ease;
+      transition: width 300ms ease;
       background-size: 200% 100%;
     }
     .progress-fill.animated { animation: progressStripes 3s linear infinite; }
@@ -180,7 +189,7 @@ INDEX_HTML = """
 <body>
   <header>
     <h1>Convert media in seconds</h1>
-    <p class="muted">Drop an image or video. We’ll handle the rest.</p>
+    <p class="muted">Drop an image or video.</p>
   </header>
 
   <main class="container">
@@ -198,7 +207,6 @@ INDEX_HTML = """
 
       <div class="actions">
         <button id="convert" class="btn" disabled>Convert</button>
-        <span id="filename" class="filename"></span>
       </div>
 
       <div class="progress-wrap hidden" id="progressWrap">
@@ -219,7 +227,6 @@ INDEX_HTML = """
   </main>
 
   <footer>
-    <span>Max speed. Minimal fuss.</span>
   </footer>
 
 <script>
@@ -264,59 +271,7 @@ function formatTime(seconds) {
   return `${mins}m ${secs}s`;
 }
 
-// Timed progress for processing stage (no animation stripes)
-let processingProgressInterval = null;
-
-function startProcessingProgress(seconds) {
-  const totalMs = Math.max(1000, Math.round(seconds * 1000));
-  const start = Date.now();
-  setProgress(0);
-  if (processingProgressInterval) clearInterval(processingProgressInterval);
-  processingProgressInterval = setInterval(() => {
-    const elapsed = Date.now() - start;
-    const pct = Math.min(100, Math.round((elapsed / totalMs) * 100));
-    setProgress(pct);
-    if (pct >= 100) {
-      clearInterval(processingProgressInterval);
-      processingProgressInterval = null;
-    }
-  }, 100);
-}
-
-function stopProcessingProgress() {
-  if (processingProgressInterval) {
-    clearInterval(processingProgressInterval);
-    processingProgressInterval = null;
-  }
-}
-
-function estimateProcessingTime(file) {
-  if (file.size <= TARGET_BYTES) {
-    return 0; // No processing needed
-  }
-  
-  const fileSizeMB = file.size / (1024 * 1024);
-  const isVideo = file.type.startsWith('video/');
-  const isImage = file.type.startsWith('image/');
-  
-  let processingMs = 0;
-  
-  if (isVideo) {
-    // Videos: consistent ~2.8 seconds regardless of size
-    processingMs = 2800;
-  } else if (isImage) {
-    // Images: 200ms base + 2ms per MB (refined from analysis)
-    processingMs = 200 + (fileSizeMB * 2);
-  } else {
-    // Unknown type, assume video (conservative estimate)
-    processingMs = 2800;
-  }
-  
-  // Add status polling overhead (~3.5 seconds)
-  const totalMs = processingMs + 3500;
-  
-  return Math.round(totalMs / 1000); // Return seconds
-}
+// Indeterminate processing animation handled by CSS class 'animated'
 
 async function initiateMultipart(filename, contentType) {
   const res = await fetch('/api/multipart/initiate', {
@@ -357,14 +312,6 @@ function getNumParts(size, chunkSize) { return Math.ceil(size / chunkSize); }
 function setSelectedFile(file) {
   if (!file) return;
   window.__selectedFile = file;
-  
-  let filenameText = file.name + ' · ' + formatBytes(file.size);
-  
-  if (file.size <= TARGET_BYTES) {
-    filenameText += ' · no processing needed';
-  }
-  
-  byId('filename').textContent = filenameText;
   byId('convert').disabled = false;
   
   // Reset UI state when new file is selected
@@ -406,14 +353,21 @@ async function uploadAndProcess() {
     const end = Math.min(start + CHUNK_SIZE, file.size);
     const blob = file.slice(start, end);
 
-    setStatus(`Uploading ${partNumber}/${numParts}...`, 'muted');
+    setStatus('Uploading...', 'muted');
     const { url } = await getPresignedPartUrl(key, uploadId, partNumber);
     const putRes = await fetch(url, { method: 'PUT', body: blob });
     if (!putRes.ok) throw new Error(`Part ${partNumber} failed`);
 
     const etag = putRes.headers.get('ETag');
     etags.push({ ETag: etag, PartNumber: partNumber });
-    setProgress(Math.round((partNumber / numParts) * 100));
+
+    // Smooth progress update - calculate percentage for current chunk
+    const chunkProgress = (partNumber - 1) / numParts * 100;
+    const currentChunkSize = end - start;
+    const totalUploaded = (partNumber - 1) * CHUNK_SIZE + currentChunkSize;
+    const smoothProgress = (totalUploaded / file.size) * 100;
+
+    setProgress(Math.round(smoothProgress));
   }
 
   setStatus('Finalizing...', 'muted');
@@ -425,23 +379,25 @@ async function uploadAndProcess() {
   const maxMs = 15 * 60 * 1000;
   const intervalMs = 3000;
   
-  // Start time-based progress for processing
-  const processingEstimate = estimateProcessingTime(file);
-  startProcessingProgress(processingEstimate);
+  // Indeterminate animation during processing
+  byId('progressFill').classList.add('animated');
+  byId('percent').classList.add('hidden');
+  byId('timeRemaining').classList.add('hidden');
+  setProgress(100);
   
   while (Date.now() - pollStart < maxMs) {
     const status = await checkStatus(key);
     if (status.failed) {
-      stopProcessingProgress();
       byId('progressFill').classList.remove('animated');
+      byId('percent').classList.remove('hidden');
       setStatus(status.error || 'Conversion failed', 'error');
       byId('convert').disabled = false;
       return;
     }
     if (status.ready) {
-      stopProcessingProgress();
       setStatus('Done', 'success');
       byId('progressFill').classList.remove('animated');
+      byId('percent').classList.remove('hidden');
       setProgress(100);
       byId('downloadLink').href = status.url;
       const sizeText = status.size ? ' · ' + formatBytes(status.size) : '';
@@ -454,7 +410,8 @@ async function uploadAndProcess() {
     }
     await new Promise(r => setTimeout(r, intervalMs));
   }
-  stopProcessingProgress();
+  byId('progressFill').classList.remove('animated');
+  byId('percent').classList.remove('hidden');
   setStatus('Timed out waiting for output', 'error');
 }
 
