@@ -114,6 +114,24 @@ INDEX_HTML = """
     .dz-hint { color: var(--muted); margin: 0; }
     .accept { font-size: 12px; color: var(--muted); margin-top: 12px; }
 
+    .file-info { display: grid; place-items: center; text-align: center; }
+    .file-icon { color: var(--primary); margin-bottom: 12px; }
+    .file-name { 
+      font-size: 14px; 
+      margin: 0 0 4px 0; 
+      font-weight: 600; 
+      color: var(--text); 
+      word-break: break-all; 
+      max-width: 350px; 
+      line-height: 1.3;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .file-size { font-size: 14px; margin: 0 0 8px 0; color: var(--muted); font-weight: 500; }
+    .file-hint { font-size: 12px; color: var(--muted); margin: 0; }
+
     .actions { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 18px; }
     .filename {
       color: var(--muted);
@@ -188,20 +206,36 @@ INDEX_HTML = """
 </head>
 <body>
   <header>
-    <h1>Convert media in seconds</h1>
-    <p class="muted">Drop an image or video.</p>
+    <h1>Convert Any Media to Under 5 Megabytes</h1>
+    <p style="margin: 8px 0 0 0; color: var(--muted); line-height: 1.6;">
+      Designed specifically for school apps and platforms that have file size limits.
+    </p>
+    <p style="margin: 8px 0 0 0; color: var(--muted); line-height: 1.6;">
+      Simply upload your file and we'll automatically compress it to meet the 5MB requirement.
+    </p>
   </header>
 
   <main class="container">
     <section class="card">
       <label id="dropzone" for="file" class="dropzone" tabindex="0" role="button" aria-label="Drop a file or click to choose">
-        <svg class="dz-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <path d="M12 16V4m0 0l-4 4m4-4l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M20 16.5a3.5 3.5 0 01-3.5 3.5h-9A3.5 3.5 0 014 16.5 3.5 3.5 0 017.5 13h.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <p class="dz-title">Drop a file here</p>
-        <p class="dz-hint">or click to choose from your computer</p>
-        <p class="accept">Images and videos supported</p>
+        <div id="dropzoneDefault">
+          <svg class="dz-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12 16V4m0 0l-4 4m4-4l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20 16.5a3.5 3.5 0 01-3.5 3.5h-9A3.5 3.5 0 014 16.5 3.5 3.5 0 017.5 13h.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <p class="dz-title">Drop a file here</p>
+          <p class="dz-hint">or click to choose from your computer</p>
+          <p class="accept">Images and videos supported</p>
+        </div>
+        <div id="fileInfo" class="file-info hidden">
+          <svg class="file-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <p id="fileName" class="file-name"></p>
+          <p id="fileSize" class="file-size"></p>
+          <p class="file-hint">Click to choose a different file</p>
+        </div>
         <input id="file" type="file" accept="image/*,video/*" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;" />
       </label>
 
@@ -310,9 +344,45 @@ async function checkStatus(key) {
 function getNumParts(size, chunkSize) { return Math.ceil(size / chunkSize); }
 
 function setSelectedFile(file) {
-  if (!file) return;
+  if (!file) {
+    // Reset to default dropzone state
+    byId('dropzoneDefault').classList.remove('hidden');
+    byId('fileInfo').classList.add('hidden');
+    return;
+  }
+  
+  // Check if file exceeds 100MB limit
+  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+  if (file.size > MAX_FILE_SIZE) {
+    // Reset UI state
+    byId('resultWrap').classList.add('hidden');
+    byId('progressFill').classList.remove('animated');
+    setProgress(0);
+    
+    // Show progress wrap so status message is visible
+    byId('progressWrap').classList.remove('hidden');
+    
+    // Show error message
+    setStatus(`File too large (${formatBytes(file.size)}). Files larger than 100MB won't compress down to 5MB and look good.`, 'error');
+    
+    // Keep convert button disabled
+    byId('convert').disabled = true;
+    window.__selectedFile = null;
+    
+    // Reset to default dropzone state
+    byId('dropzoneDefault').classList.remove('hidden');
+    byId('fileInfo').classList.add('hidden');
+    return;
+  }
+  
   window.__selectedFile = file;
   byId('convert').disabled = false;
+  
+  // Show file info in dropzone
+  byId('fileName').textContent = file.name;
+  byId('fileSize').textContent = formatBytes(file.size);
+  byId('dropzoneDefault').classList.add('hidden');
+  byId('fileInfo').classList.remove('hidden');
   
   // Reset UI state when new file is selected
   byId('resultWrap').classList.add('hidden');
