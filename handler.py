@@ -249,7 +249,6 @@ INDEX_HTML = """
 
       <div class="actions">
         <button id="convert" class="btn" disabled>Convert</button>
-        <a id="openLink" class="link-button hidden" href="#" target="_blank" rel="noopener">Open</a>
         <a id="downloadLink" class="link-button hidden" href="#" download>Download</a>
       </div>
 
@@ -416,7 +415,6 @@ function setSelectedFile(file) {
   // Reset button states
   byId('convert').classList.remove('hidden');
   byId('downloadLink').classList.add('hidden');
-  byId('openLink').classList.add('hidden');
 }
 
 async function uploadAndProcess() {
@@ -430,10 +428,6 @@ async function uploadAndProcess() {
     const link = byId('downloadLink');
     link.href = blobUrl;
     link.download = file.name;
-    const openLink = byId('openLink');
-    openLink.href = blobUrl;
-    openLink.target = '_blank';
-    openLink.classList.remove('hidden');
     byId('convert').classList.add('hidden');
     link.classList.remove('hidden');
     byId('resultWrap').classList.remove('hidden');
@@ -497,7 +491,6 @@ async function uploadAndProcess() {
       byId('convert').disabled = false;
       byId('convert').classList.remove('hidden');
       byId('downloadLink').classList.add('hidden');
-      byId('openLink').classList.add('hidden');
       return;
     }
     if (status.ready) {
@@ -509,14 +502,10 @@ async function uploadAndProcess() {
       const filename = getDownloadFilename(status);
       link.href = status.url;
       link.download = filename;
-      const openLink = byId('openLink');
-      openLink.href = status.inlineUrl || status.url;
-      openLink.target = '_blank';
 
       // Replace convert button with download button
       byId('convert').classList.add('hidden');
       link.classList.remove('hidden');
-      openLink.classList.remove('hidden');
 
       const sizeText = status.size ? ' · ' + formatBytes(status.size) : '';
       byId('readyText').textContent = 'Your file is ready' + sizeText + '.';
@@ -534,7 +523,6 @@ async function uploadAndProcess() {
   byId('convert').disabled = false;
   byId('convert').classList.remove('hidden');
   byId('downloadLink').classList.add('hidden');
-  byId('openLink').classList.add('hidden');
 }
 
 // Wiring
@@ -708,22 +696,12 @@ def _handle_status(event):
 						},
 						ExpiresIn=3600,
 					)
-					inline_url = s3.generate_presigned_url(
-						ClientMethod="get_object",
-						Params={
-							"Bucket": BUCKET_NAME,
-							"Key": out_key,
-							"ResponseContentDisposition": "inline",
-						},
-						ExpiresIn=3600,
-					)
 					return _response(200, {
 						"ready": True,
 						"outputKey": out_key,
 						"contentType": head.get("ContentType"),
 						"size": int(head.get("ContentLength") or 0),
 						"url": url,
-						"inlineUrl": inline_url,
 					})
 				except Exception:
 					# If for some reason the output isn't there, fall through to legacy checks
@@ -755,22 +733,12 @@ def _handle_status(event):
 				},
 				ExpiresIn=3600,
 			)
-			inline_url = s3.generate_presigned_url(
-				ClientMethod="get_object",
-				Params={
-					"Bucket": BUCKET_NAME,
-					"Key": out_key,
-					"ResponseContentDisposition": "inline",
-				},
-				ExpiresIn=3600,
-			)
 			return _response(200, {
 				"ready": True,
 				"outputKey": out_key,
 				"contentType": head.get("ContentType"),
 				"size": int(head.get("ContentLength") or 0),
 				"url": url,
-				"inlineUrl": inline_url,
 			})
 		except Exception:
 			# not found, continue checking next possible key
@@ -791,22 +759,12 @@ def _handle_status(event):
 				},
 				ExpiresIn=3600,
 			)
-			inline_url = s3.generate_presigned_url(
-				ClientMethod="get_object",
-				Params={
-					"Bucket": BUCKET_NAME,
-					"Key": key,
-					"ResponseContentDisposition": "inline",
-				},
-				ExpiresIn=3600,
-			)
 			return _response(200, {
 				"ready": True,
 				"outputKey": key,
 				"contentType": orig_head.get("ContentType"),
 				"size": orig_size,
 				"url": orig_url,
-				"inlineUrl": inline_url,
 				"note": "original file already <= 5MB",
 			})
 	except Exception:
