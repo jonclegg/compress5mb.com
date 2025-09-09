@@ -182,20 +182,28 @@ INDEX_HTML = """
     @keyframes progressStripes { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .status-line { margin-top: 8px; display: flex; justify-content: space-between; color: var(--muted); font-size: 14px; }
 
-    .result { display: grid; gap: 12px; margin-top: 18px; align-items: center; grid-template-columns: 1fr auto auto; }
+    .result { display: flex; flex-direction: column; gap: 18px; margin-top: 18px; align-items: center; text-align: center; }
     .link-button {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 14px;
-      border-radius: 12px;
+      appearance: none;
+      padding: 20px 32px;
+      border-radius: 16px;
       border: 1px solid rgba(255,255,255,0.06);
       background: linear-gradient(180deg, #06b6d4, #0891b2);
       color: #fff;
-      text-decoration: none;
+      font-size: 18px;
       font-weight: 700;
-      box-shadow: 0 10px 24px rgba(8,145,178,0.28);
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+      box-shadow: 0 12px 28px rgba(8,145,178,0.28);
+      min-width: 200px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      text-decoration: none;
     }
+    .link-button:hover { filter: brightness(1.03); transform: translateY(-1px); }
     .muted { color: var(--muted); }
     .success { color: var(--success); font-weight: 600; }
     .error { color: var(--error); font-weight: 600; }
@@ -241,6 +249,7 @@ INDEX_HTML = """
 
       <div class="actions">
         <button id="convert" class="btn" disabled>Convert</button>
+        <a id="downloadLink" class="link-button hidden" href="#" download>Download</a>
       </div>
 
       <div class="progress-wrap hidden" id="progressWrap">
@@ -254,7 +263,6 @@ INDEX_HTML = """
 
       <div id="resultWrap" class="result hidden">
         <span id="readyText" class="success">Your file is ready.</span>
-        <a id="downloadLink" class="link-button" href="#" download>Download</a>
         <button id="copyLink" class="btn secondary hidden">Copy link</button>
       </div>
     </section>
@@ -303,6 +311,19 @@ function formatTime(seconds) {
   const mins = Math.floor(seconds / 60);
   const secs = Math.round(seconds % 60);
   return `${mins}m ${secs}s`;
+}
+
+function getDownloadFilename(status) {
+  if (status.outputKey) {
+    const parts = status.outputKey.split('/');
+    const filename = parts[parts.length - 1];
+    if (filename && filename !== '') return filename;
+  }
+  if (status.contentType) {
+    if (status.contentType.startsWith('video/')) return 'converted-video.mp4';
+    if (status.contentType.startsWith('image/')) return 'converted-image.jpg';
+  }
+  return 'converted-file';
 }
 
 // Indeterminate processing animation handled by CSS class 'animated'
@@ -390,6 +411,10 @@ function setSelectedFile(file) {
   byId('progressFill').classList.remove('animated');
   setProgress(0);
   setStatus('Waiting', 'muted');
+
+  // Reset button states
+  byId('convert').classList.remove('hidden');
+  byId('downloadLink').classList.add('hidden');
 }
 
 async function uploadAndProcess() {
@@ -403,6 +428,8 @@ async function uploadAndProcess() {
     const link = byId('downloadLink');
     link.href = blobUrl;
     link.download = file.name;
+    byId('convert').classList.add('hidden');
+    link.classList.remove('hidden');
     byId('resultWrap').classList.remove('hidden');
     setProgress(100);
     return;
@@ -462,6 +489,8 @@ async function uploadAndProcess() {
       byId('percent').classList.remove('hidden');
       setStatus(status.error || 'Conversion failed', 'error');
       byId('convert').disabled = false;
+      byId('convert').classList.remove('hidden');
+      byId('downloadLink').classList.add('hidden');
       return;
     }
     if (status.ready) {
@@ -469,7 +498,15 @@ async function uploadAndProcess() {
       byId('progressFill').classList.remove('animated');
       byId('percent').classList.remove('hidden');
       setProgress(100);
-      byId('downloadLink').href = status.url;
+      const link = byId('downloadLink');
+      const filename = getDownloadFilename(status);
+      link.href = status.url;
+      link.download = filename;
+
+      // Replace convert button with download button
+      byId('convert').classList.add('hidden');
+      link.classList.remove('hidden');
+
       const sizeText = status.size ? ' · ' + formatBytes(status.size) : '';
       byId('readyText').textContent = 'Your file is ready' + sizeText + '.';
       const copyBtn = byId('copyLink');
@@ -483,6 +520,9 @@ async function uploadAndProcess() {
   byId('progressFill').classList.remove('animated');
   byId('percent').classList.remove('hidden');
   setStatus('Timed out waiting for output', 'error');
+  byId('convert').disabled = false;
+  byId('convert').classList.remove('hidden');
+  byId('downloadLink').classList.add('hidden');
 }
 
 // Wiring
@@ -643,22 +683,17 @@ def _handle_status(event):
 			return _response(200, {"ready": False, "state": "processing"})
 		if state == "completed":
 			out_key = status_payload.get("output")
-			url_cached = status_payload.get("url")
-			if out_key and url_cached:
-				# Fast path: use URL and size/type if present
-				return _response(200, {
-					"ready": True,
-					"outputKey": out_key,
-					"url": url_cached,
-					"size": status_payload.get("outputSize"),
-					"contentType": status_payload.get("outputType"),
-				})
 			if out_key:
 				try:
 					head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)
+					basename = os.path.basename(out_key)
 					url = s3.generate_presigned_url(
 						ClientMethod="get_object",
-						Params={"Bucket": BUCKET_NAME, "Key": out_key},
+						Params={
+							"Bucket": BUCKET_NAME,
+							"Key": out_key,
+							"ResponseContentDisposition": f"attachment; filename=\"{basename}\"",
+						},
 						ExpiresIn=3600,
 					)
 					return _response(200, {
@@ -688,9 +723,14 @@ def _handle_status(event):
 	for out_key in possible:
 		try:
 			head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)
+			basename = os.path.basename(out_key)
 			url = s3.generate_presigned_url(
 				ClientMethod="get_object",
-				Params={"Bucket": BUCKET_NAME, "Key": out_key},
+				Params={
+					"Bucket": BUCKET_NAME,
+					"Key": out_key,
+					"ResponseContentDisposition": f"attachment; filename=\"{basename}\"",
+				},
 				ExpiresIn=3600,
 			)
 			return _response(200, {
@@ -709,9 +749,14 @@ def _handle_status(event):
 		orig_head = s3.head_object(Bucket=BUCKET_NAME, Key=key)
 		orig_size = int(orig_head.get("ContentLength") or 0)
 		if orig_size <= 5 * 1024 * 1024:
+			basename = os.path.basename(key)
 			orig_url = s3.generate_presigned_url(
 				ClientMethod="get_object",
-				Params={"Bucket": BUCKET_NAME, "Key": key},
+				Params={
+					"Bucket": BUCKET_NAME,
+					"Key": key,
+					"ResponseContentDisposition": f"attachment; filename=\"{basename}\"",
+				},
 				ExpiresIn=3600,
 			)
 			return _response(200, {
