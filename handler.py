@@ -169,6 +169,7 @@ INDEX_HTML = """
     .btn:not(:disabled):hover { filter: brightness(1.03); transform: translateY(-1px); }
     .btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); box-shadow: none; }
     .btn.secondary:hover { background: rgba(148,163,184,0.10); }
+    .btn.with-icon { display: inline-flex; align-items: center; gap: 8px; }
 
     .progress-wrap { margin-top: 16px; }
     .progress { height: 12px; width: 100%; background: rgba(148,163,184,0.15); border-radius: 999px; border: 1px solid var(--border); overflow: hidden; }
@@ -224,7 +225,7 @@ INDEX_HTML = """
   </header>
 
   <main class="container">
-    <section class="card">
+    <section id="screenStart" class="card">
       <label id="dropzone" for="file" class="dropzone" tabindex="0" role="button" aria-label="Drop a file or click to choose">
         <div id="dropzoneDefault">
           <svg class="dz-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -249,10 +250,14 @@ INDEX_HTML = """
 
       <div class="actions">
         <button id="convert" class="btn" disabled>Convert</button>
-        <a id="downloadLink" class="link-button hidden" href="#" download>Download</a>
       </div>
+      <div id="startStatus" class="muted" style="margin-top:12px;">
+        
+      </div>
+    </section>
 
-      <div class="progress-wrap hidden" id="progressWrap">
+    <section id="screenProcessing" class="card hidden">
+      <div class="progress-wrap" id="progressWrap">
         <div class="progress"><div id="progressFill" class="progress-fill"></div></div>
         <div class="status-line">
           <span id="status" class="muted">Waiting</span>
@@ -260,10 +265,15 @@ INDEX_HTML = """
           <span id="percent" class="muted">0%</span>
         </div>
       </div>
-
-      <div id="resultWrap" class="result hidden">
-        <span id="readyText" class="success">Your file is ready.</span>
-        <button id="copyLink" class="btn secondary hidden">Copy link</button>
+      <div class="actions">
+        <button id="processingDownload" class="btn" disabled>Download</button>
+        <button id="convertMore" class="btn secondary with-icon hidden" type="button" aria-label="Convert More (opens in a new tab)">
+          Convert More
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M13 5h6m0 0v6m0-6L10 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20 14v5a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
       </div>
     </section>
   </main>
@@ -277,10 +287,24 @@ const TARGET_BYTES = 5 * 1024 * 1024; // 5MB size threshold
 
 function byId(id) { return document.getElementById(id); }
 
+function showScreen(name) {
+  const start = byId('screenStart');
+  const processing = byId('screenProcessing');
+  if (start) start.classList.toggle('hidden', name !== 'start');
+  if (processing) processing.classList.toggle('hidden', name !== 'processing');
+}
+
 function setStatus(text, cls) {
   const el = byId('status');
-  el.textContent = text;
-  if (cls) el.className = cls;
+  if (el) {
+    el.textContent = text;
+    if (cls) el.className = cls;
+  }
+  const elStart = byId('startStatus');
+  if (elStart) {
+    elStart.textContent = text;
+    if (cls) elStart.className = cls;
+  }
 }
 
 function setProgress(percent) {
@@ -375,14 +399,6 @@ function setSelectedFile(file) {
   // Check if file exceeds 100MB limit
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
   if (file.size > MAX_FILE_SIZE) {
-    // Reset UI state
-    byId('resultWrap').classList.add('hidden');
-    byId('progressFill').classList.remove('animated');
-    setProgress(0);
-    
-    // Show progress wrap so status message is visible
-    byId('progressWrap').classList.remove('hidden');
-    
     // Show error message
     setStatus(`File too large (${formatBytes(file.size)}). Files larger than 100MB won't compress down to 5MB and look good.`, 'error');
     
@@ -404,17 +420,6 @@ function setSelectedFile(file) {
   byId('fileSize').textContent = formatBytes(file.size);
   byId('dropzoneDefault').classList.add('hidden');
   byId('fileInfo').classList.remove('hidden');
-  
-  // Reset UI state when new file is selected
-  byId('resultWrap').classList.add('hidden');
-  byId('progressWrap').classList.add('hidden');
-  byId('progressFill').classList.remove('animated');
-  setProgress(0);
-  setStatus('Waiting', 'muted');
-
-  // Reset button states
-  byId('convert').classList.remove('hidden');
-  byId('downloadLink').classList.add('hidden');
 }
 
 async function uploadAndProcess() {
@@ -423,22 +428,36 @@ async function uploadAndProcess() {
 
   // Early exit if file already <= 5MB
   if (file.size <= TARGET_BYTES) {
+    showScreen('processing');
+    setProgress(0);
+    byId('progressFill').classList.remove('animated');
+    byId('percent').classList.remove('hidden');
+    byId('timeRemaining').classList.add('hidden');
+    byId('progressWrap').classList.remove('hidden');
     setStatus('Already under 5 MB — no conversion needed.', 'success');
     const blobUrl = URL.createObjectURL(file);
-    const link = byId('downloadLink');
-    link.href = blobUrl;
-    link.download = file.name;
-    byId('convert').classList.add('hidden');
-    link.classList.remove('hidden');
-    byId('resultWrap').classList.remove('hidden');
+    const dlBtn = byId('processingDownload');
+    dlBtn.disabled = false;
+    dlBtn.onclick = () => { window.location.href = blobUrl; };
+    const cmBtnEarly = byId('convertMore');
+    if (cmBtnEarly) {
+      cmBtnEarly.classList.remove('hidden');
+      cmBtnEarly.onclick = () => { window.open('/', '_blank'); };
+    }
     setProgress(100);
     return;
   }
 
   byId('convert').disabled = true;
+  showScreen('processing');
   byId('progressWrap').classList.remove('hidden');
   setStatus('Starting upload...', 'muted');
   setProgress(0);
+  const dlBtn = byId('processingDownload');
+  dlBtn.disabled = true;
+  dlBtn.onclick = null;
+  const cmBtnInit = byId('convertMore');
+  if (cmBtnInit) cmBtnInit.classList.add('hidden');
 
   const { uploadId, key } = await initiateMultipart(file.name, file.type || 'application/octet-stream');
 
@@ -489,8 +508,7 @@ async function uploadAndProcess() {
       byId('percent').classList.remove('hidden');
       setStatus(status.error || 'Conversion failed', 'error');
       byId('convert').disabled = false;
-      byId('convert').classList.remove('hidden');
-      byId('downloadLink').classList.add('hidden');
+      showScreen('start');
       return;
     }
     if (status.ready) {
@@ -498,21 +516,16 @@ async function uploadAndProcess() {
       byId('progressFill').classList.remove('animated');
       byId('percent').classList.remove('hidden');
       setProgress(100);
-      const link = byId('downloadLink');
       const filename = getDownloadFilename(status);
-      link.href = status.url;
-      link.download = filename;
-
-      // Replace convert button with download button
-      byId('convert').classList.add('hidden');
-      link.classList.remove('hidden');
-
-      const sizeText = status.size ? ' · ' + formatBytes(status.size) : '';
-      byId('readyText').textContent = 'Your file is ready' + sizeText + '.';
-      const copyBtn = byId('copyLink');
-      copyBtn.classList.remove('hidden');
-      copyBtn.onclick = () => navigator.clipboard.writeText(status.url);
-      byId('resultWrap').classList.remove('hidden');
+      const dlBtnReady = byId('processingDownload');
+      dlBtnReady.disabled = false;
+      dlBtnReady.onclick = () => { window.location.href = status.url; };
+      dlBtnReady.textContent = 'Download';
+      const cmBtn = byId('convertMore');
+      if (cmBtn) {
+        cmBtn.classList.remove('hidden');
+        cmBtn.onclick = () => { window.open('/', '_blank'); };
+      }
       return;
     }
     await new Promise(r => setTimeout(r, intervalMs));
@@ -521,8 +534,7 @@ async function uploadAndProcess() {
   byId('percent').classList.remove('hidden');
   setStatus('Timed out waiting for output', 'error');
   byId('convert').disabled = false;
-  byId('convert').classList.remove('hidden');
-  byId('downloadLink').classList.add('hidden');
+  showScreen('start');
 }
 
 // Wiring
@@ -547,6 +559,7 @@ byId('convert').addEventListener('click', () => {
   uploadAndProcess().catch(err => {
     setStatus(err && err.message ? err.message : String(err), 'error');
     byId('convert').disabled = false;
+    showScreen('start');
   });
 });
 </script>
