@@ -128,9 +128,8 @@ def _convert_video(src: str, dst: str):
 	video_kbps = _estimate_video_bitrate(TARGET_BYTES, duration)
 	logger.info(f"Target video bitrate: {video_kbps} kbps")
 	
-	# Two-pass H.264 baseline with constrained bitrate
-	passlog = src + ".log"
-	_run(["ffmpeg", "-y", "-i", src, "-c:v", "libx264", "-b:v", f"{video_kbps}k", "-maxrate", f"{video_kbps}k", "-bufsize", f"{video_kbps*2}k", "-preset", "veryfast", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p", "-an", dst])
+	# H.264 baseline with constrained bitrate and audio
+	_run(["ffmpeg", "-y", "-i", src, "-c:v", "libx264", "-b:v", f"{video_kbps}k", "-maxrate", f"{video_kbps}k", "-bufsize", f"{video_kbps*2}k", "-preset", "veryfast", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k", dst])
 	
 	size = os.path.getsize(dst)
 	logger.info(f"Video output size: {size} bytes (target: {TARGET_BYTES})")
@@ -139,7 +138,7 @@ def _convert_video(src: str, dst: str):
 	if size > TARGET_BYTES:
 		reduced_kbps = max(300, int(video_kbps*0.75))
 		logger.info(f"Video too large, retrying with reduced bitrate: {reduced_kbps} kbps and scaling")
-		_run(["ffmpeg", "-y", "-i", src, "-vf", "scale='min(1280,iw)':-2", "-c:v", "libx264", "-b:v", f"{reduced_kbps}k", "-maxrate", f"{reduced_kbps}k", "-bufsize", f"{max(600, int(video_kbps*1.5))}k", "-an", dst])
+		_run(["ffmpeg", "-y", "-i", src, "-vf", "scale='min(1280,iw)':-2", "-c:v", "libx264", "-b:v", f"{reduced_kbps}k", "-maxrate", f"{reduced_kbps}k", "-bufsize", f"{max(600, int(video_kbps*1.5))}k", "-c:a", "aac", "-b:a", "64k", dst])
 		final_size = os.path.getsize(dst)
 		logger.info(f"Final video size: {final_size} bytes")
 

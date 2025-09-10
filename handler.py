@@ -211,11 +211,112 @@ INDEX_HTML = """
     .hidden { display: none; }
 
     footer { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+
+    /* Mobile optimizations */
+    @media (max-width: 768px) {
+      header { padding: 20px 16px; }
+      header h1 { font-size: 24px; line-height: 1.2; }
+      header p { font-size: 14px; margin: 6px 0 0 0; }
+      
+      .container { max-width: 100%; margin: 0; padding: 12px 16px 32px; }
+      
+      .card { 
+        padding: 20px; 
+        border-radius: 12px;
+        margin: 0;
+      }
+      
+      .actions { 
+        flex-direction: column; 
+        gap: 12px; 
+        margin-top: 20px;
+        width: 100%;
+      }
+      
+      .btn { 
+        padding: 16px 24px; 
+        font-size: 16px; 
+        min-width: unset;
+        width: 100%;
+        border-radius: 12px;
+      }
+      
+      .btn.secondary {
+        margin-top: 8px;
+      }
+      
+      .progress-wrap { margin-top: 20px; }
+      .progress { height: 10px; }
+      
+      .status-line { 
+        flex-direction: column; 
+        gap: 4px; 
+        text-align: center;
+        font-size: 13px;
+      }
+      
+      .dropzone { 
+        padding: 24px 16px; 
+        min-height: 180px;
+        border-radius: 8px;
+      }
+      
+      .dz-title { font-size: 18px; }
+      .dz-hint { font-size: 14px; }
+      .accept { font-size: 11px; }
+      
+      .file-name { 
+        font-size: 13px; 
+        max-width: 280px; 
+        line-height: 1.4;
+      }
+      .file-size { font-size: 13px; }
+      .file-hint { font-size: 11px; }
+      
+      .filename { 
+        max-width: 45ch; 
+        font-size: 13px;
+        padding: 4px 8px;
+      }
+      
+      .result { gap: 16px; margin-top: 16px; }
+      .link-button { 
+        padding: 16px 24px; 
+        font-size: 16px; 
+        min-width: unset;
+        width: 100%;
+        border-radius: 12px;
+      }
+    }
+
+    /* Extra small mobile devices */
+    @media (max-width: 480px) {
+      header h1 { font-size: 20px; }
+      header p { font-size: 13px; }
+      
+      .container { padding: 8px 12px 24px; }
+      .card { padding: 16px; }
+      
+      .dropzone { 
+        padding: 20px 12px; 
+        min-height: 160px;
+      }
+      
+      .btn { 
+        padding: 14px 20px; 
+        font-size: 15px;
+      }
+      
+      .file-name { max-width: 240px; }
+      .filename { max-width: 35ch; font-size: 12px; }
+      
+      .status-line { font-size: 12px; }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Convert Any Media to Under 5 Megabytes</h1>
+    <h1>Compress Any Media to Under 5 Megabytes</h1>
     <p style="margin: 8px 0 0 0; color: var(--muted); line-height: 1.6;">
       Designed specifically for school apps and platforms that have file size limits.
     </p>
@@ -396,11 +497,11 @@ function setSelectedFile(file) {
     return;
   }
   
-  // Check if file exceeds 100MB limit
-  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+  // Check if file exceeds 200MB limit
+  const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
   if (file.size > MAX_FILE_SIZE) {
     // Show error message
-    setStatus(`File too large (${formatBytes(file.size)}). Files larger than 100MB won't compress down to 5MB and look good.`, 'error');
+    setStatus(`File too large (${formatBytes(file.size)}). Files larger than 200MB won't compress down to 5MB and look good.`, 'error');
     
     // Keep convert button disabled
     byId('convert').disabled = true;
