@@ -10,6 +10,8 @@ import imghdr
 
 import boto3
 
+# Note: ImageMagick binaries are available in the layer but ffmpeg is used for compatibility
+
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -46,7 +48,12 @@ def _head_object(key: str):
 ###############################################################################
 
 def _download_to_temp(key: str) -> str:
-	fd, path = tempfile.mkstemp()
+	# Extract extension from key to preserve it in temp file
+	_, _, filename = key.rpartition("/")
+	_, _, ext = filename.rpartition(".")
+	suffix = f".{ext}" if ext else ""
+	
+	fd, path = tempfile.mkstemp(suffix=suffix)
 	os.close(fd)
 	s3.download_file(Bucket=BUCKET_NAME, Key=key, Filename=path)
 	return path
@@ -68,12 +75,41 @@ def _is_image(content_type: str) -> bool:
 
 ###############################################################################
 
+def _detect_image_robust(file_path: str) -> bool:
+	"""
+	Image detection with fallback to file extensions for formats imghdr misses.
+	"""
+	# First try imghdr for common formats
+	if imghdr.what(file_path) is not None:
+		return True
+	
+	# Fallback: check file extension for formats imghdr doesn't support
+	image_extensions = {
+		'.heic', '.heif', '.avif', '.webp', '.jxl', '.bpg', 
+		'.tiff', '.tif', '.ico', '.psd', '.raw', '.cr2', '.nef', '.arw'
+	}
+	
+	file_ext = os.path.splitext(file_path)[1].lower()
+	if file_ext in image_extensions:
+		logger.info(f"Detected image by extension: {file_ext}")
+		return True
+	
+	return False
+
+###############################################################################
+
 def _run(cmd: list[str]):
 	# no try/except per user preference; fail fast on nonzero
 	logger.info(f"Running command: {' '.join(cmd)}")
-	result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+	result = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 	if result.stderr:
 		logger.info(f"Command stderr: {result.stderr.decode()}")
+	if result.stdout:
+		logger.info(f"Command stdout: {result.stdout.decode()}")
+	if result.returncode != 0:
+		logger.error(f"Command failed with exit code {result.returncode}")
+		logger.error(f"Command stderr: {result.stderr.decode()}")
+		raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
 	return result
 
 ###############################################################################
@@ -175,30 +211,25 @@ def handle(event, context):
 		# Mark processing started
 		_write_status(key, "processing", {"message": "conversion started"})
 
-		# Skip if already small enough
+		# Log file size but always process
 		if size and size <= TARGET_BYTES:
-			logger.info(f"Skipping conversion: file size {size} <= {TARGET_BYTES} bytes")
-			# Provide presigned URL so status polling doesn't need HeadObject
-			url = s3.generate_presigned_url(
-				ClientMethod="get_object",
-				Params={"Bucket": BUCKET_NAME, "Key": key},
-				ExpiresIn=3600,
-			)
-			_write_status(key, "completed", {"output": key, "outputSize": size, "url": url, "note": "original already <= 5MB"})
-			return _response(200, {"skipped": True, "reason": "already <= 5MB"})
+			logger.info(f"File size {size} <= {TARGET_BYTES} bytes, but processing anyway for potential format conversion")
 
 		# Download
 		logger.info(f"Downloading {key} to temporary file")
 		src_path = _download_to_temp(key)
 		logger.info(f"Downloaded to {src_path}")
 		
-		base, _sep, filename = key.rpartition("/")
-		logger.info(f"Processing file: {filename}")
+		# Extract filename from uploads/{uid}/{filename} structure
+		_, _, filename = key.rpartition("/")
+		name_no_ext, _, ext = filename.rpartition(".")
+		logger.info(f"Processing file: {filename} (name: {name_no_ext}, ext: {ext})")
 
-		# Decide media type from file contents (no reliance on key name or HeadObject)
-		media_is_image = imghdr.what(src_path) is not None
+		# Decide media type from file contents using robust detection
+		media_is_image = _detect_image_robust(src_path)
+		logger.info(f"Image detection result for {filename}: {media_is_image}")
 		if media_is_image:
-			out_key = f"processed/{uuid.uuid4()}.jpg"
+			out_key = f"processed/{name_no_ext}.jpg"
 			logger.info(f"Converting image to {out_key}")
 			with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
 				dst_path = tmp.name
@@ -210,7 +241,7 @@ def handle(event, context):
 			output_type = "image/jpeg"
 			os.unlink(dst_path)
 		else:
-			out_key = f"processed/{uuid.uuid4()}.mp4"
+			out_key = f"processed/{name_no_ext}.mp4"
 			logger.info(f"Converting video to {out_key}")
 			with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
 				dst_path = tmp.name

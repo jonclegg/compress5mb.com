@@ -83,7 +83,7 @@ layers:
     name: ${self:service}-${sls:stage}-ffmpeg
     compatibleRuntimes:
       - python3.11
-    description: ffmpeg and ffprobe static binaries for media conversion
+    description: ffmpeg, ffprobe, ImageMagick convert and identify static binaries for media conversion
     package:
       patterns:
         - '**/*'

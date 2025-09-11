@@ -321,7 +321,7 @@ INDEX_HTML = """
       Designed specifically for school apps and platforms that have file size limits.
     </p>
     <p style="margin: 8px 0 0 0; color: var(--muted); line-height: 1.6;">
-      Simply upload your file and we'll automatically compress it to meet the 5MB requirement.
+      Simply upload your file and we'll automatically compress it to meet the 5MB requirement or convert the format.
     </p>
   </header>
 
@@ -527,27 +527,6 @@ async function uploadAndProcess() {
   const file = window.__selectedFile;
   if (!file) return;
 
-  // Early exit if file already <= 5MB
-  if (file.size <= TARGET_BYTES) {
-    showScreen('processing');
-    setProgress(0);
-    byId('progressFill').classList.remove('animated');
-    byId('percent').classList.remove('hidden');
-    byId('timeRemaining').classList.add('hidden');
-    byId('progressWrap').classList.remove('hidden');
-    setStatus('Already under 5 MB — no conversion needed.', 'success');
-    const blobUrl = URL.createObjectURL(file);
-    const dlBtn = byId('processingDownload');
-    dlBtn.disabled = false;
-    dlBtn.onclick = () => { window.location.href = blobUrl; };
-    const cmBtnEarly = byId('convertMore');
-    if (cmBtnEarly) {
-      cmBtnEarly.classList.remove('hidden');
-      cmBtnEarly.onclick = () => { window.open('/', '_blank'); };
-    }
-    setProgress(100);
-    return;
-  }
 
   byId('convert').disabled = true;
   showScreen('processing');
@@ -729,7 +708,9 @@ def _handle_initiate(event):
 	content_type = data.get("contentType", "application/octet-stream")
 	if not filename:
 		return _response(400, {"error": "filename is required"})
-	key = f"uploads/{uuid.uuid4()}"
+	# Create upload key preserving filename in a unique directory
+	uid = uuid.uuid4()
+	key = f"uploads/{uid}/{filename}"
 	create = s3.create_multipart_upload(Bucket=BUCKET_NAME, Key=key, ContentType=content_type)
 	upload_id = create["UploadId"]
 	return _response(200, {"uploadId": upload_id, "key": key})
@@ -824,66 +805,7 @@ def _handle_status(event):
 		# No status file yet; fall through to legacy behavior
 		pass
 
-	# Legacy mapping: uploads/<uuid>-<name.ext> -> processed/<name>.(mp4|jpg)
-	base, _sep, filename = key.rpartition("/")
-	name_no_ext = filename.rsplit(".", 1)[0]
-
-	# Try both video and image outputs
-	possible = [
-		f"processed/{name_no_ext}.mp4",
-		f"processed/{name_no_ext}.jpg",
-	]
-
-	for out_key in possible:
-		try:
-			head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)
-			basename = os.path.basename(out_key)
-			url = s3.generate_presigned_url(
-				ClientMethod="get_object",
-				Params={
-					"Bucket": BUCKET_NAME,
-					"Key": out_key,
-					"ResponseContentDisposition": f"attachment; filename=\"{basename}\"",
-				},
-				ExpiresIn=3600,
-			)
-			return _response(200, {
-				"ready": True,
-				"outputKey": out_key,
-				"contentType": head.get("ContentType"),
-				"size": int(head.get("ContentLength") or 0),
-				"url": url,
-			})
-		except Exception:
-			# not found, continue checking next possible key
-			continue
-
-	# If processed output not found, but original upload exists and is already <= 5MB, return it
-	try:
-		orig_head = s3.head_object(Bucket=BUCKET_NAME, Key=key)
-		orig_size = int(orig_head.get("ContentLength") or 0)
-		if orig_size <= 5 * 1024 * 1024:
-			basename = os.path.basename(key)
-			orig_url = s3.generate_presigned_url(
-				ClientMethod="get_object",
-				Params={
-					"Bucket": BUCKET_NAME,
-					"Key": key,
-					"ResponseContentDisposition": f"attachment; filename=\"{basename}\"",
-				},
-				ExpiresIn=3600,
-			)
-			return _response(200, {
-				"ready": True,
-				"outputKey": key,
-				"contentType": orig_head.get("ContentType"),
-				"size": orig_size,
-				"url": orig_url,
-				"note": "original file already <= 5MB",
-			})
-	except Exception:
-		pass
-
+	# No explicit status file found and no completed conversion yet
 	return _response(200, {"ready": False})
 
 ###############################################################################
