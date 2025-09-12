@@ -7,6 +7,7 @@ import shutil
 from decimal import Decimal
 import uuid
 import imghdr
+from urllib.parse import unquote_plus
 
 import boto3
 
@@ -55,7 +56,16 @@ def _download_to_temp(key: str) -> str:
 	
 	fd, path = tempfile.mkstemp(suffix=suffix)
 	os.close(fd)
-	s3.download_file(Bucket=BUCKET_NAME, Key=key, Filename=path)
+	
+	# Use get_object instead of download_file to avoid HeadObject permission issues
+	try:
+		s3.download_file(Bucket=BUCKET_NAME, Key=key, Filename=path)
+	except Exception as e:
+		logger.info(f"download_file failed: {e}, trying get_object fallback")
+		obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+		with open(path, 'wb') as f:
+			f.write(obj['Body'].read())
+	
 	return path
 
 ###############################################################################
@@ -195,8 +205,10 @@ def handle(event, context):
 
 	rec = records[0]
 	bucket = rec["s3"]["bucket"]["name"]
-	key = rec["s3"]["object"]["key"]
-	logger.info(f"Processing S3 object: bucket={bucket}, key={key}")
+	key_raw = rec["s3"]["object"]["key"]
+	key = unquote_plus(key_raw)  # Decode URL-encoded characters
+	logger.info(f"Processing S3 object: bucket={bucket}, key_raw={key_raw}, key_decoded={key}")
+	logger.info(f"Full S3 event record: {json.dumps(rec, indent=2)}")
 	
 	if bucket != BUCKET_NAME:
 		logger.warning(f"Bucket mismatch: expected {BUCKET_NAME}, got {bucket}")
@@ -217,6 +229,7 @@ def handle(event, context):
 
 		# Download
 		logger.info(f"Downloading {key} to temporary file")
+		logger.info(f"Bucket: {BUCKET_NAME}, Key: {repr(key)}")
 		src_path = _download_to_temp(key)
 		logger.info(f"Downloaded to {src_path}")
 		
