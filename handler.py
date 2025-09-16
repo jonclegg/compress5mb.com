@@ -135,6 +135,61 @@ INDEX_HTML = """
     .file-size { font-size: 14px; margin: 0 0 8px 0; color: var(--muted); font-weight: 500; }
     .file-hint { font-size: 12px; color: var(--muted); margin: 0; }
 
+    .file-list { 
+      display: flex; 
+      flex-direction: column; 
+      gap: 12px; 
+      max-height: 300px; 
+      overflow-y: auto; 
+      padding: 16px 0; 
+    }
+    .file-item { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      padding: 12px 16px; 
+      background: rgba(148,163,184,0.08); 
+      border: 1px solid var(--border); 
+      border-radius: 12px; 
+      transition: background 150ms ease;
+    }
+    .file-item:hover { background: rgba(148,163,184,0.12); }
+    .file-item-info { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+    .file-item-name { 
+      font-size: 14px; 
+      font-weight: 600; 
+      color: var(--text); 
+      margin: 0;
+      word-break: break-all;
+      line-height: 1.3;
+    }
+    .file-item-size { 
+      font-size: 12px; 
+      color: var(--muted); 
+      margin: 0;
+    }
+    .file-item-remove { 
+      appearance: none; 
+      background: none; 
+      border: none; 
+      color: var(--muted); 
+      cursor: pointer; 
+      padding: 4px; 
+      border-radius: 4px; 
+      transition: color 150ms ease, background 150ms ease;
+      margin-left: 8px;
+    }
+    .file-item-remove:hover { 
+      color: var(--error); 
+      background: rgba(248,113,113,0.1); 
+    }
+    .files-summary { 
+      text-align: center; 
+      color: var(--muted); 
+      font-size: 13px; 
+      margin: 8px 0; 
+    }
+
     .actions { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 18px; }
     .filename {
       color: var(--muted);
@@ -282,6 +337,19 @@ INDEX_HTML = """
         padding: 4px 8px;
       }
       
+      .file-list { padding: 12px 0; }
+      .file-item { 
+        padding: 12px; 
+        flex-direction: column; 
+        align-items: stretch; 
+        gap: 8px;
+      }
+      .file-item-info { gap: 4px; }
+      .file-item-name { font-size: 13px; }
+      .file-item-size { font-size: 11px; }
+      .file-item-remove { align-self: flex-end; margin-left: 0; }
+      .files-summary { font-size: 12px; }
+      
       .result { gap: 16px; margin-top: 16px; }
       .link-button { 
         padding: 16px 24px; 
@@ -336,9 +404,9 @@ INDEX_HTML = """
             <path d="M12 16V4m0 0l-4 4m4-4l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M20 16.5a3.5 3.5 0 01-3.5 3.5h-9A3.5 3.5 0 014 16.5 3.5 3.5 0 017.5 13h.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <p class="dz-title">Drop a file here</p>
+          <p class="dz-title">Drop files here</p>
           <p class="dz-hint">or click to choose from your computer</p>
-          <p class="accept">Images and videos supported</p>
+          <p class="accept">Images and videos supported • Multiple files OK</p>
         </div>
         <div id="fileInfo" class="file-info hidden">
           <svg class="file-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -347,9 +415,11 @@ INDEX_HTML = """
           </svg>
           <p id="fileName" class="file-name"></p>
           <p id="fileSize" class="file-size"></p>
-          <p class="file-hint">Click to choose a different file</p>
+          <p class="file-hint">Click to choose different files</p>
         </div>
-        <input id="file" type="file" accept="image/*,video/*" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;" />
+        <div id="fileList" class="file-list hidden"></div>
+        <div id="filesSummary" class="files-summary hidden"></div>
+        <input id="file" type="file" accept="image/*,video/*" multiple style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;" />
       </label>
 
       <div class="actions">
@@ -492,58 +562,177 @@ async function checkStatus(key) {
 
 function getNumParts(size, chunkSize) { return Math.ceil(size / chunkSize); }
 
-function setSelectedFile(file) {
-  if (!file) {
+// Global array to store selected files
+window.__selectedFiles = [];
+
+function setSelectedFiles(files) {
+  if (!files || files.length === 0) {
     // Reset to default dropzone state
+    window.__selectedFiles = [];
     byId('dropzoneDefault').classList.remove('hidden');
     byId('fileInfo').classList.add('hidden');
-    return;
-  }
-  
-  // Check if file exceeds 200MB limit
-  const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
-  if (file.size > MAX_FILE_SIZE) {
-    // Show error message
-    setStatus(`File too large (${formatBytes(file.size)}). Files larger than 200MB won't compress down to 5MB and look good.`, 'error');
-    
-    // Keep convert button disabled
+    byId('fileList').classList.add('hidden');
+    byId('filesSummary').classList.add('hidden');
     byId('convert').disabled = true;
-    window.__selectedFile = null;
-    
-    // Reset to default dropzone state
-    byId('dropzoneDefault').classList.remove('hidden');
-    byId('fileInfo').classList.add('hidden');
+    setStatus('', 'muted');
     return;
   }
   
-  window.__selectedFile = file;
+  // Filter out files that are too large and show errors
+  const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
+  const validFiles = [];
+  const invalidFiles = [];
+  
+  for (const file of files) {
+    if (file.size > MAX_FILE_SIZE) {
+      invalidFiles.push(file);
+    } else {
+      validFiles.push(file);
+    }
+  }
+  
+  if (invalidFiles.length > 0) {
+    const fileNames = invalidFiles.map(f => f.name).join(', ');
+    setStatus(`${invalidFiles.length} file(s) too large: ${fileNames}. Files larger than 200MB won't compress down to 5MB and look good.`, 'error');
+  } else {
+    setStatus('', 'muted');
+  }
+  
+  window.__selectedFiles = validFiles;
+  
+  if (validFiles.length === 0) {
+    byId('convert').disabled = true;
+    return;
+  }
+  
   byId('convert').disabled = false;
   
-  // Show file info in dropzone
-  byId('fileName').textContent = file.name;
-  byId('fileSize').textContent = formatBytes(file.size);
-  byId('dropzoneDefault').classList.add('hidden');
-  byId('fileInfo').classList.remove('hidden');
+  // Show file list
+  if (validFiles.length === 1) {
+    // Single file - show in original format
+    const file = validFiles[0];
+    byId('fileName').textContent = file.name;
+    byId('fileSize').textContent = formatBytes(file.size);
+    byId('dropzoneDefault').classList.add('hidden');
+    byId('fileInfo').classList.remove('hidden');
+    byId('fileList').classList.add('hidden');
+    byId('filesSummary').classList.add('hidden');
+  } else {
+    // Multiple files - show as list
+    byId('dropzoneDefault').classList.add('hidden');
+    byId('fileInfo').classList.add('hidden');
+    byId('fileList').classList.remove('hidden');
+    byId('filesSummary').classList.remove('hidden');
+    
+    renderFileList();
+  }
 }
 
-async function uploadAndProcess() {
-  const file = window.__selectedFile;
-  if (!file) return;
+function renderFileList() {
+  const fileList = byId('fileList');
+  const filesSummary = byId('filesSummary');
+  
+  // Clear existing content
+  fileList.innerHTML = '';
+  
+  // Render each file
+  window.__selectedFiles.forEach((file, index) => {
+    const fileItem = document.createElement('div');
+    fileItem.className = 'file-item';
+    fileItem.innerHTML = `
+      <div class="file-item-info">
+        <p class="file-item-name">${file.name}</p>
+        <p class="file-item-size">${formatBytes(file.size)}</p>
+      </div>
+      <button class="file-item-remove" title="Remove file" data-index="${index}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    `;
+    
+    // Add remove functionality
+    const removeBtn = fileItem.querySelector('.file-item-remove');
+    removeBtn.addEventListener('click', () => {
+      removeFile(index);
+    });
+    
+    fileList.appendChild(fileItem);
+  });
+  
+  // Update summary
+  const totalSize = window.__selectedFiles.reduce((sum, file) => sum + file.size, 0);
+  filesSummary.textContent = `${window.__selectedFiles.length} files selected • ${formatBytes(totalSize)} total`;
+}
 
+function removeFile(index) {
+  window.__selectedFiles.splice(index, 1);
+  
+  if (window.__selectedFiles.length === 0) {
+    setSelectedFiles([]);
+  } else {
+    renderFileList();
+    
+    // Update summary
+    const totalSize = window.__selectedFiles.reduce((sum, file) => sum + file.size, 0);
+    byId('filesSummary').textContent = `${window.__selectedFiles.length} files selected • ${formatBytes(totalSize)} total`;
+  }
+}
+
+function addFiles(newFiles) {
+  // Convert FileList to Array and combine with existing files
+  const existingFiles = window.__selectedFiles || [];
+  const filesToAdd = Array.from(newFiles);
+  const allFiles = [...existingFiles, ...filesToAdd];
+  setSelectedFiles(allFiles);
+}
+
+// Global tracking for multi-file upload
+window.__activeUploads = [];
+
+async function uploadAndProcess() {
+  const files = window.__selectedFiles;
+  if (!files || files.length === 0) return;
 
   byId('convert').disabled = true;
   showScreen('processing');
-  byId('progressWrap').classList.remove('hidden');
-  setStatus('Starting upload...', 'muted');
-  setProgress(0);
-  const dlBtn = byId('processingDownload');
-  dlBtn.disabled = true;
-  dlBtn.onclick = null;
-  const cmBtnInit = byId('convertMore');
-  if (cmBtnInit) cmBtnInit.classList.add('hidden');
+  
+  // Initialize the processing screen for multiple files
+  initializeMultiFileProcessing(files);
+  
+  // Process all files
+  window.__activeUploads = files.map((file, index) => ({
+    file,
+    index,
+    key: null,
+    status: 'pending',
+    error: null,
+    downloadUrl: null
+  }));
+  
+  // Upload all files sequentially
+  for (let i = 0; i < files.length; i++) {
+    try {
+      await uploadSingleFile(i);
+    } catch (error) {
+      console.error(`Failed to upload file ${i}:`, error);
+      updateFileStatus(i, 'failed', error.message);
+    }
+  }
+  
+  // Start polling for all uploaded files
+  pollAllFiles();
+}
 
+async function uploadSingleFile(fileIndex) {
+  const upload = window.__activeUploads[fileIndex];
+  const file = upload.file;
+  
+  updateFileStatus(fileIndex, 'uploading', `Uploading...`);
+  
   const { uploadId, key } = await initiateMultipart(file.name, file.type || 'application/octet-stream');
-
+  upload.key = key;
+  
   const numParts = getNumParts(file.size, CHUNK_SIZE);
   const etags = [];
 
@@ -552,7 +741,6 @@ async function uploadAndProcess() {
     const end = Math.min(start + CHUNK_SIZE, file.size);
     const blob = file.slice(start, end);
 
-    setStatus('Uploading...', 'muted');
     const { url } = await getPresignedPartUrl(key, uploadId, partNumber);
     const putRes = await fetch(url, { method: 'PUT', body: blob });
     if (!putRes.ok) throw new Error(`Part ${partNumber} failed`);
@@ -560,64 +748,236 @@ async function uploadAndProcess() {
     const etag = putRes.headers.get('ETag');
     etags.push({ ETag: etag, PartNumber: partNumber });
 
-    // Smooth progress update - calculate percentage for current chunk
-    const chunkProgress = (partNumber - 1) / numParts * 100;
-    const currentChunkSize = end - start;
-    const totalUploaded = (partNumber - 1) * CHUNK_SIZE + currentChunkSize;
-    const smoothProgress = (totalUploaded / file.size) * 100;
-
-    setProgress(Math.round(smoothProgress));
+    // Update progress for this specific file
+    const progress = Math.round((partNumber / numParts) * 100);
+    updateFileProgress(fileIndex, progress);
+    
+    // For single file, also update the main progress bar
+    if (window.__selectedFiles.length === 1) {
+      setProgress(progress);
+      setStatus('Uploading...', 'muted');
+    }
   }
 
-  setStatus('Finalizing...', 'muted');
   await completeMultipart(key, uploadId, etags);
-
-  setStatus('Processing...', 'muted');
-
-  const pollStart = Date.now();
-  const maxMs = 15 * 60 * 1000;
-  const intervalMs = 3000;
+  updateFileStatus(fileIndex, 'processing', 'Processing...');
   
-  // Indeterminate animation during processing
-  byId('progressFill').classList.add('animated');
-  byId('percent').classList.add('hidden');
-  byId('timeRemaining').classList.add('hidden');
-  setProgress(100);
+  // For single file, update main status
+  if (window.__selectedFiles.length === 1) {
+    setStatus('Processing...', 'muted');
+    setProgress(100);
+    byId('progressFill').classList.add('animated');
+    byId('percent').classList.add('hidden');
+  }
+}
+
+function initializeMultiFileProcessing(files) {
+  if (files.length === 1) {
+    // Single file - use enhanced single file display with filename
+    initializeSingleFileProcessing(files[0]);
+    return;
+  }
+  
+  // Multiple files - show list
+  byId('progressWrap').classList.add('hidden');
+  
+  // Create the multi-file status area
+  const processing = byId('screenProcessing');
+  
+  // Find existing multiFileStatus or create it
+  let multiFileStatus = byId('multiFileStatus');
+  if (!multiFileStatus) {
+    multiFileStatus = document.createElement('div');
+    multiFileStatus.id = 'multiFileStatus';
+    multiFileStatus.innerHTML = '<h3 style="margin: 0 0 16px 0; color: var(--text);">Processing Files</h3>';
+    
+    // Insert it before the actions div
+    const actions = processing.querySelector('.actions');
+    processing.insertBefore(multiFileStatus, actions);
+  }
+  
+  // Clear and rebuild the file status list
+  const existingList = multiFileStatus.querySelector('.file-status-list');
+  if (existingList) existingList.remove();
+  
+  const fileStatusList = document.createElement('div');
+  fileStatusList.className = 'file-status-list';
+  fileStatusList.style.cssText = 'display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px;';
+  
+  files.forEach((file, index) => {
+    const fileStatus = document.createElement('div');
+    fileStatus.className = 'file-status-item';
+    fileStatus.id = `fileStatus${index}`;
+    fileStatus.style.cssText = 'padding: 16px; background: rgba(148,163,184,0.08); border: 1px solid var(--border); border-radius: 12px;';
+    
+    fileStatus.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-weight: 600; color: var(--text); font-size: 14px;">${file.name}</span>
+        <span id="fileStatusText${index}" style="color: var(--muted); font-size: 12px;">Waiting</span>
+      </div>
+      <div style="height: 8px; background: rgba(148,163,184,0.15); border-radius: 4px; overflow: hidden;">
+        <div id="fileProgress${index}" style="height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--primary)); transition: width 300ms ease;"></div>
+      </div>
+      <div id="fileDownload${index}" class="hidden" style="margin-top: 12px;">
+        <button class="btn" style="padding: 8px 16px; font-size: 14px; min-width: auto;">Download</button>
+      </div>
+    `;
+    
+    fileStatusList.appendChild(fileStatus);
+  });
+  
+  multiFileStatus.appendChild(fileStatusList);
+  
+  // Hide individual download button, show convert more button
+  byId('processingDownload').classList.add('hidden');
+  const cmBtn = byId('convertMore');
+  if (cmBtn) {
+    cmBtn.classList.remove('hidden');
+    cmBtn.onclick = () => { window.open('/', '_blank'); };
+  }
+}
+
+function initializeSingleFileProcessing(file) {
+  // Show the original progress bar but add filename display
+  byId('progressWrap').classList.remove('hidden');
+  
+  // Add filename display above progress bar
+  const processing = byId('screenProcessing');
+  let filenameDisplay = byId('singleFileDisplay');
+  if (!filenameDisplay) {
+    filenameDisplay = document.createElement('div');
+    filenameDisplay.id = 'singleFileDisplay';
+    filenameDisplay.style.cssText = 'text-align: center; margin-bottom: 16px;';
+    
+    const progressWrap = byId('progressWrap');
+    processing.insertBefore(filenameDisplay, progressWrap);
+  }
+  
+  filenameDisplay.innerHTML = `
+    <h3 style="margin: 0 0 8px 0; color: var(--text); font-size: 16px;">Processing File</h3>
+    <p style="margin: 0; color: var(--muted); font-size: 14px; word-break: break-all;">${file.name}</p>
+  `;
+  
+  // Hide multi-file status if it exists
+  const multiFileStatus = byId('multiFileStatus');
+  if (multiFileStatus) {
+    multiFileStatus.style.display = 'none';
+  }
+  
+  // Show the original download button
+  byId('processingDownload').classList.remove('hidden');
+}
+
+function updateFileStatus(fileIndex, status, message) {
+  const upload = window.__activeUploads[fileIndex];
+  upload.status = status;
+  
+  const statusEl = byId(`fileStatusText${fileIndex}`);
+  if (statusEl) {
+    statusEl.textContent = message || status;
+    
+    // Update color based on status
+    if (status === 'failed') {
+      statusEl.style.color = 'var(--error)';
+    } else if (status === 'completed') {
+      statusEl.style.color = 'var(--success)';
+    } else {
+      statusEl.style.color = 'var(--muted)';
+    }
+  }
+}
+
+function updateFileProgress(fileIndex, progress) {
+  const progressEl = byId(`fileProgress${fileIndex}`);
+  if (progressEl) {
+    progressEl.style.width = progress + '%';
+  }
+}
+
+function showFileDownload(fileIndex, downloadUrl, filename) {
+  const downloadEl = byId(`fileDownload${fileIndex}`);
+  if (downloadEl) {
+    downloadEl.classList.remove('hidden');
+    const btn = downloadEl.querySelector('button');
+    btn.onclick = () => { window.location.href = downloadUrl; };
+  }
+  
+  updateFileProgress(fileIndex, 100);
+  updateFileStatus(fileIndex, 'completed', 'Ready for download');
+}
+
+async function pollAllFiles() {
+  const maxMs = 15 * 60 * 1000; // 15 minutes total
+  const intervalMs = 3000; // 3 seconds
+  const pollStart = Date.now();
   
   while (Date.now() - pollStart < maxMs) {
-    const status = await checkStatus(key);
-    if (status.failed) {
-      byId('progressFill').classList.remove('animated');
-      byId('percent').classList.remove('hidden');
-      setStatus(status.error || 'Conversion failed', 'error');
-      byId('convert').disabled = false;
-      showScreen('start');
-      return;
-    }
-    if (status.ready) {
-      setStatus('Done', 'success');
-      byId('progressFill').classList.remove('animated');
-      byId('percent').classList.remove('hidden');
-      setProgress(100);
-      const filename = getDownloadFilename(status);
-      const dlBtnReady = byId('processingDownload');
-      dlBtnReady.disabled = false;
-      dlBtnReady.onclick = () => { window.location.href = status.url; };
-      dlBtnReady.textContent = 'Download';
-      const cmBtn = byId('convertMore');
-      if (cmBtn) {
-        cmBtn.classList.remove('hidden');
-        cmBtn.onclick = () => { window.open('/', '_blank'); };
+    let allCompleted = true;
+    
+    for (let i = 0; i < window.__activeUploads.length; i++) {
+      const upload = window.__activeUploads[i];
+      
+      if (upload.status === 'processing' || upload.status === 'uploading') {
+        allCompleted = false;
+        
+        if (upload.key && upload.status === 'processing') {
+          try {
+            const status = await checkStatus(upload.key);
+            
+            if (status.failed) {
+              updateFileStatus(i, 'failed', status.error || 'Conversion failed');
+              
+              // For single file, update main UI
+              if (window.__selectedFiles.length === 1) {
+                byId('progressFill').classList.remove('animated');
+                byId('percent').classList.remove('hidden');
+                setStatus(status.error || 'Conversion failed', 'error');
+                byId('convert').disabled = false;
+                showScreen('start');
+                return;
+              }
+            } else if (status.ready) {
+              const filename = getDownloadFilename(status);
+              upload.downloadUrl = status.url;
+              showFileDownload(i, status.url, filename);
+              
+              // For single file, update main download button
+              if (window.__selectedFiles.length === 1) {
+                byId('progressFill').classList.remove('animated');
+                byId('percent').classList.remove('hidden');
+                setStatus('Done', 'success');
+                setProgress(100);
+                const dlBtn = byId('processingDownload');
+                dlBtn.disabled = false;
+                dlBtn.onclick = () => { window.location.href = status.url; };
+                dlBtn.textContent = 'Download';
+                const cmBtn = byId('convertMore');
+                if (cmBtn) {
+                  cmBtn.classList.remove('hidden');
+                  cmBtn.onclick = () => { window.open('/', '_blank'); };
+                }
+              }
+            }
+          } catch (error) {
+            console.error(`Failed to check status for file ${i}:`, error);
+          }
+        }
       }
-      return;
     }
+    
+    if (allCompleted) {
+      break;
+    }
+    
     await new Promise(r => setTimeout(r, intervalMs));
   }
-  byId('progressFill').classList.remove('animated');
-  byId('percent').classList.remove('hidden');
-  setStatus('Timed out waiting for output', 'error');
-  byId('convert').disabled = false;
-  showScreen('start');
+  
+  // Check for any files that timed out
+  window.__activeUploads.forEach((upload, i) => {
+    if (upload.status === 'processing') {
+      updateFileStatus(i, 'failed', 'Timed out waiting for conversion');
+    }
+  });
 }
 
 // Wiring
@@ -629,13 +989,17 @@ dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
 dropzone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropzone.classList.remove('drag');
-  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) setSelectedFile(f);
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (files && files.length > 0) {
+    addFiles(files);
+  }
 });
 
 fileInput.addEventListener('change', () => {
-  const f = fileInput.files && fileInput.files[0];
-  if (f) setSelectedFile(f);
+  const files = fileInput.files;
+  if (files && files.length > 0) {
+    addFiles(files);
+  }
 });
 
 byId('convert').addEventListener('click', () => {
