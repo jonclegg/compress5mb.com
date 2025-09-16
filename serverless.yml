@@ -9,6 +9,7 @@ provider:
   stage: dev
   environment:
     BUCKET_NAME: ${self:service}-${sls:stage}-uploads
+    DYNAMO_TABLE: ${self:service}-${sls:stage}-uploads-status
   httpApi:
     cors:
       allowedOrigins:
@@ -38,6 +39,16 @@ provider:
         - s3:ListBucket
       Resource:
         - arn:aws:s3:::${self:provider.environment.BUCKET_NAME}
+    - Effect: Allow
+      Action:
+        - dynamodb:PutItem
+        - dynamodb:GetItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+        - dynamodb:Query
+        - dynamodb:Scan
+      Resource:
+        - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:provider.environment.DYNAMO_TABLE}
 
 functions:
   app:
@@ -96,6 +107,21 @@ layers:
 resources:
   Resources:
     # Bucket is expected to already exist; skipping creation to avoid conflicts
+    
+    UploadsStatusTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.DYNAMO_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: upload_key
+            AttributeType: S
+        KeySchema:
+          - AttributeName: upload_key
+            KeyType: HASH
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
 
 package:
   patterns:

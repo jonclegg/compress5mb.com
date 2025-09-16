@@ -7,6 +7,7 @@ import shutil
 from decimal import Decimal
 import uuid
 import imghdr
+import time
 from urllib.parse import unquote_plus
 
 import boto3
@@ -18,7 +19,9 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
+DYNAMO_TABLE = os.environ["DYNAMO_TABLE"]
 s3 = boto3.client("s3")
+dynamodb = boto3.resource("dynamodb")
 
 TARGET_BYTES = 5 * 1024 * 1024
 
@@ -28,18 +31,18 @@ def _response(status_code, body):
 
 ###############################################################################
 
-def _status_key_for_upload(upload_key: str) -> str:
-	base, _sep, filename = upload_key.rpartition("/")
-	return f"status/{filename}.json"
-
-###############################################################################
-
 def _write_status(upload_key: str, state: str, extra: dict | None = None):
-	status_key = _status_key_for_upload(upload_key)
-	payload = {"state": state, "source": upload_key}
+	table = dynamodb.Table(DYNAMO_TABLE)
+	payload = {
+		"upload_key": upload_key,
+		"state": state,
+		"source": upload_key,
+		"updated_at": int(time.time()),
+		"ttl": int(time.time()) + (7 * 24 * 60 * 60)  # 7 days TTL
+	}
 	if extra:
 		payload.update(extra)
-	s3.put_object(Bucket=BUCKET_NAME, Key=status_key, Body=json.dumps(payload).encode("utf-8"), ContentType="application/json")
+	table.put_item(Item=payload)
 
 ###############################################################################
 

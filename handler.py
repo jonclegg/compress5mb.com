@@ -2,11 +2,14 @@ import os
 import json
 import base64
 import uuid
+import time
 
 import boto3
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
+DYNAMO_TABLE = os.environ["DYNAMO_TABLE"]
 s3 = boto3.client("s3")
+dynamodb = boto3.resource("dynamodb")
 
 
 INDEX_HTML = """
@@ -662,18 +665,28 @@ def _response(status_code, body, content_type="application/json"):
 
 ###############################################################################
 
-def _status_key_for_upload(upload_key: str) -> str:
-	base, _sep, filename = upload_key.rpartition("/")
-	return f"status/{filename}.json"
+def _write_status(upload_key: str, state: str, extra: dict | None = None):
+	table = dynamodb.Table(DYNAMO_TABLE)
+	payload = {
+		"upload_key": upload_key,
+		"state": state,
+		"source": upload_key,
+		"updated_at": int(time.time()),
+		"ttl": int(time.time()) + (7 * 24 * 60 * 60)  # 7 days TTL
+	}
+	if extra:
+		payload.update(extra)
+	table.put_item(Item=payload)
 
 ###############################################################################
 
-def _write_status(upload_key: str, state: str, extra: dict | None = None):
-	status_key = _status_key_for_upload(upload_key)
-	payload = {"state": state, "source": upload_key}
-	if extra:
-		payload.update(extra)
-	s3.put_object(Bucket=BUCKET_NAME, Key=status_key, Body=json.dumps(payload).encode("utf-8"), ContentType="application/json")
+def _get_status(upload_key: str) -> dict | None:
+	table = dynamodb.Table(DYNAMO_TABLE)
+	try:
+		response = table.get_item(Key={"upload_key": upload_key})
+		return response.get("Item")
+	except Exception:
+		return None
 
 ###############################################################################
 
@@ -766,46 +779,43 @@ def _handle_status(event):
 	if not key:
 		return _response(400, {"error": "key is required"})
 
-	# First, check explicit status JSON if present
-	status_key = _status_key_for_upload(key)
-	try:
-		obj = s3.get_object(Bucket=BUCKET_NAME, Key=status_key)
-		status_payload = json.loads(obj["Body"].read())
-		state = status_payload.get("state")
-		if state == "failure":
-			return _response(200, {"ready": False, "failed": True, "error": status_payload.get("error")})
-		if state == "processing":
-			return _response(200, {"ready": False, "state": "processing"})
-		if state == "completed":
-			out_key = status_payload.get("output")
-			if out_key:
-				try:
-					head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)
-					basename = os.path.basename(out_key)
-					url = s3.generate_presigned_url(
-						ClientMethod="get_object",
-						Params={
-							"Bucket": BUCKET_NAME,
-							"Key": out_key,
-							"ResponseContentDisposition": f"attachment; filename=\"{basename}\"",
-						},
-						ExpiresIn=3600,
-					)
-					return _response(200, {
-						"ready": True,
-						"outputKey": out_key,
-						"contentType": head.get("ContentType"),
-						"size": int(head.get("ContentLength") or 0),
-						"url": url,
-					})
-				except Exception:
-					# If for some reason the output isn't there, fall through to legacy checks
-					pass
-	except Exception:
-		# No status file yet; fall through to legacy behavior
-		pass
+	# Get status from DynamoDB
+	status_payload = _get_status(key)
+	if not status_payload:
+		return _response(200, {"ready": False})
 
-	# No explicit status file found and no completed conversion yet
+	state = status_payload.get("state")
+	if state == "failure":
+		return _response(200, {"ready": False, "failed": True, "error": status_payload.get("error")})
+	if state == "processing":
+		return _response(200, {"ready": False, "state": "processing"})
+	if state == "completed":
+		out_key = status_payload.get("output")
+		if out_key:
+			try:
+				head = s3.head_object(Bucket=BUCKET_NAME, Key=out_key)
+				basename = os.path.basename(out_key)
+				url = s3.generate_presigned_url(
+					ClientMethod="get_object",
+					Params={
+						"Bucket": BUCKET_NAME,
+						"Key": out_key,
+						"ResponseContentDisposition": f"attachment; filename=\"{basename}\"",
+					},
+					ExpiresIn=3600,
+				)
+				return _response(200, {
+					"ready": True,
+					"outputKey": out_key,
+					"contentType": head.get("ContentType"),
+					"size": int(head.get("ContentLength") or 0),
+					"url": url,
+				})
+			except Exception:
+				# If for some reason the output isn't there, return error
+				return _response(200, {"ready": False, "failed": True, "error": "Output file not found"})
+
+	# Unknown state
 	return _response(200, {"ready": False})
 
 ###############################################################################
